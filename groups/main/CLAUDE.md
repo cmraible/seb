@@ -59,6 +59,12 @@ Keep messages clean and readable for WhatsApp.
 
 This is the **main channel**, which has elevated privileges.
 
+## User Information
+
+- **Name**: Chris
+- **Timezone**: Pacific Time (PST/PDT, UTC-8/UTC-7)
+- **Location**: San Francisco Bay Area (specifically interested in South Bay)
+
 ## Container Mounts
 
 Main has access to the entire project:
@@ -67,6 +73,20 @@ Main has access to the entire project:
 |----------------|-----------|--------|
 | `/workspace/project` | Project root | read-write |
 | `/workspace/group` | `groups/main/` | read-write |
+| `/workspace/extra/obsidian-vault` | `/home/ubuntu/obsidian-vault` | read-write |
+
+## Obsidian Vault
+
+You have read-write access to the user's Obsidian vault at `/workspace/extra/obsidian-vault`. This is a shared knowledge base — the same vault the user sees in Obsidian on their Mac and iPhone (synced via Obsidian Sync).
+
+- Notes are plain markdown files (`.md`)
+- Folders organise topics
+- Use `[[wikilinks]]` to link between notes
+- Use `#tags` for categorisation
+- Frontmatter (YAML between `---` delimiters) is supported for metadata
+- The vault is live: changes you make appear in the user's Obsidian immediately
+
+When the user asks you to take notes, remember something long-term, or work on the knowledge base, use the vault.
 
 Key paths inside the container:
 - `/workspace/project/store/messages.db` - SQLite database
