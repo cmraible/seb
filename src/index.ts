@@ -14,6 +14,7 @@ import {
 } from './config.js';
 import { WhatsAppChannel } from './channels/whatsapp.js';
 import { TelegramChannel } from './channels/telegram.js';
+import { ensureContainerRuntimeRunning, cleanupOrphans } from './container-runtime.js';
 import {
   ContainerOutput,
   runContainerAgent,
@@ -41,7 +42,6 @@ import { findChannel, formatMessages, formatOutbound } from './router.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
-import { ensureContainerRuntimeRunning, cleanupOrphans } from './container-runtime.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -396,13 +396,10 @@ function recoverPendingMessages(): void {
   }
 }
 
-function ensureContainerSystemRunning(): void {
-  ensureContainerRuntimeRunning();
-  cleanupOrphans();
-}
 
 async function main(): Promise<void> {
-  ensureContainerSystemRunning();
+  ensureContainerRuntimeRunning();
+  cleanupOrphans();
   initDatabase();
   logger.info('Database initialized');
   loadState();
