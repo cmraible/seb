@@ -187,7 +187,7 @@ function createPreCompactHook(): HookCallback {
 // Secrets to strip from Bash tool subprocess environments.
 // These are needed by claude-code for API auth but should never
 // be visible to commands Kit runs.
-const SECRET_ENV_VARS = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'OP_SERVICE_ACCOUNT_TOKEN'];
+const SECRET_ENV_VARS = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'OP_SERVICE_ACCOUNT_TOKEN', 'OPENROUTER_API_KEY', 'ANTHROPIC_AUTH_TOKEN'];
 
 function createSanitizeBashHook(): HookCallback {
   return async (input, _toolUseId, _context) => {
@@ -433,8 +433,8 @@ async function runQuery(
         'TodoWrite', 'ToolSearch', 'Skill',
         'NotebookEdit',
         'mcp__nanoclaw__*',
-        'mcp__gmail__*',
-        'mcp__1password__*'
+        'mcp__1password__*',
+        ...(containerInput.isMain ? ['mcp__gmail__*', 'mcp__ticktick__*'] : [])
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -450,8 +450,19 @@ async function runQuery(
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
           },
         },
-        gmail: { command: 'npx', args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'] },
         '1password': { command: 'npx', args: ['-y', '@takescake/1password-mcp'] },
+        ...(containerInput.isMain ? {
+          gmail: { command: 'npx', args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'] },
+          ticktick: {
+            command: 'npx',
+            args: ['-y', '@alexarevalo.ai/mcp-server-ticktick'],
+            env: {
+              TICKTICK_CLIENT_ID: '96uFUM2la9v3HfGEwm',
+              TICKTICK_CLIENT_SECRET: 'yGYoklnClk10fdWN71I7Xfru9RlM7400',
+              TICKTICK_ACCESS_TOKEN: 'b5b0cc22-1e93-423c-8b34-7d03c02a8865',
+            },
+          },
+        } : {}),
       },
       hooks: {
         PreCompact: [{ hooks: [createPreCompactHook()] }],
@@ -517,6 +528,13 @@ async function main(): Promise<void> {
   const sdkEnv: Record<string, string | undefined> = { ...process.env };
   for (const [key, value] of Object.entries(containerInput.secrets || {})) {
     sdkEnv[key] = value;
+  }
+
+  // OpenRouter: if an API key is provided, route through OpenRouter
+  if (sdkEnv.OPENROUTER_API_KEY) {
+    sdkEnv.ANTHROPIC_BASE_URL = 'https://openrouter.ai/api';
+    sdkEnv.ANTHROPIC_AUTH_TOKEN = sdkEnv.OPENROUTER_API_KEY;
+    sdkEnv.ANTHROPIC_API_KEY = '';
   }
 
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
