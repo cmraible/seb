@@ -451,7 +451,7 @@ export function updateTaskAfterRun(
   db.prepare(
     `
     UPDATE scheduled_tasks
-    SET next_run = ?, last_run = ?, last_result = ?, status = CASE WHEN ? IS NULL THEN 'completed' ELSE status END
+    SET next_run = ?, last_run = ?, last_result = ?, status = CASE WHEN ? IS NULL THEN 'completed' ELSE 'active' END
     WHERE id = ?
   `,
   ).run(nextRun, now, lastResult, nextRun, id);
