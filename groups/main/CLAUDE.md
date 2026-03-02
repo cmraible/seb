@@ -106,18 +106,17 @@ Use 1Password to store any secrets you need (API keys, account passwords, tokens
 
 ## TickTick (Task Management)
 
-You have access to TickTick for collaborative task management with Seb via MCP tools:
-- `mcp__ticktick__get_user_projects` - List all projects
-- `mcp__ticktick__get_project_by_id` - Get project details
-- `mcp__ticktick__get_project_with_data` - Get project with all tasks
-- `mcp__ticktick__get_task_by_ids` - Get specific task details
-- `mcp__ticktick__create_task` - Create a new task
-- `mcp__ticktick__update_task` - Update an existing task
-- `mcp__ticktick__complete_task` - Mark a task as complete
-- `mcp__ticktick__delete_task` - Delete a task
-- `mcp__ticktick__create_project` - Create a new project/list
-- `mcp__ticktick__update_project` - Update a project
-- `mcp__ticktick__delete_project` - Delete a project
+You have access to TickTick via the `ticktick` CLI (env vars are pre-configured). Always use `--json` for parseable output.
+
+Key commands:
+- `ticktick tasks list` - List tasks (optionally `--project-id <id>`)
+- `ticktick tasks today` - Show tasks due today
+- `ticktick tasks search "<query>"` - Search tasks
+- `ticktick tasks add "<title>"` - Create a task (supports `--project-id`, `--priority`, `--due`)
+- `ticktick tasks update <id> --title "<new>"` - Update a task
+- `ticktick tasks done <id>` - Mark a task as complete
+- `ticktick tasks delete <id>` - Delete a task
+- `ticktick projects list` - List all projects
 
 Use TickTick when Chris asks about tasks, to-dos, or project management.
 

@@ -435,7 +435,7 @@ async function runQuery(
         'NotebookEdit',
         'mcp__nanoclaw__*',
         'mcp__1password__*',
-        ...(containerInput.isMain ? ['mcp__gmail__*', 'mcp__ticktick__*'] : [])
+        ...(containerInput.isMain ? ['mcp__gmail__*'] : [])
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -454,15 +454,6 @@ async function runQuery(
         '1password': { command: 'npx', args: ['-y', '@takescake/1password-mcp'] },
         ...(containerInput.isMain ? {
           gmail: { command: 'npx', args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'] },
-          ticktick: {
-            command: 'npx',
-            args: ['-y', '@alexarevalo.ai/mcp-server-ticktick'],
-            env: {
-              TICKTICK_CLIENT_ID: '96uFUM2la9v3HfGEwm',
-              TICKTICK_CLIENT_SECRET: 'yGYoklnClk10fdWN71I7Xfru9RlM7400',
-              TICKTICK_ACCESS_TOKEN: 'b5b0cc22-1e93-423c-8b34-7d03c02a8865',
-            },
-          },
         } : {}),
       },
       hooks: {
@@ -522,6 +513,13 @@ async function main(): Promise<void> {
       error: `Failed to parse input: ${err instanceof Error ? err.message : String(err)}`
     });
     process.exit(1);
+  }
+
+  // Set TickTick env vars for the main group so Bash subprocesses (ticktick-cli) inherit them
+  if (containerInput.isMain) {
+    process.env.TICKTICK_CLIENT_ID = '96uFUM2la9v3HfGEwm';
+    process.env.TICKTICK_CLIENT_SECRET = 'yGYoklnClk10fdWN71I7Xfru9RlM7400';
+    process.env.TICKTICK_ACCESS_TOKEN = 'b5b0cc22-1e93-423c-8b34-7d03c02a8865';
   }
 
   // Build SDK env: merge secrets into process.env for the SDK only.
