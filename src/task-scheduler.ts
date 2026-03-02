@@ -16,6 +16,7 @@ import {
   getDueTasks,
   getTaskById,
   logTaskRun,
+  updateTask,
   updateTaskAfterRun,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
@@ -61,6 +62,8 @@ async function runTask(
       result: null,
       error: `Group not found: ${task.group_folder}`,
     });
+    // Restore to active so scheduler can retry
+    updateTask(task.id, { status: 'active' });
     return;
   }
 
@@ -199,11 +202,17 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
       }
 
       for (const task of dueTasks) {
-        // Re-check task status in case it was paused/cancelled
+        // Re-check task status in case it was paused/cancelled/already running
         const currentTask = getTaskById(task.id);
         if (!currentTask || currentTask.status !== 'active') {
           continue;
         }
+
+        // Mark as 'running' so subsequent polls don't pick it up again.
+        // runTask will restore to 'active' (with updated next_run) on
+        // completion, or back to 'active' (same next_run) on failure so
+        // it gets retried.
+        updateTask(currentTask.id, { status: 'running' });
 
         deps.queue.enqueueTask(
           currentTask.chat_jid,
