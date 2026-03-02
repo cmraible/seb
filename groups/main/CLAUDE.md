@@ -86,6 +86,23 @@ You have access to a 1Password vault ("Seb") via MCP tools for secure secret sto
 
 Use 1Password to store any secrets you need (API keys, account passwords, tokens) rather than saving them in plaintext files.
 
+## TickTick (Task Management)
+
+You have access to TickTick for collaborative task management with Seb via MCP tools:
+- `mcp__ticktick__get_user_projects` - List all projects
+- `mcp__ticktick__get_project_by_id` - Get project details
+- `mcp__ticktick__get_project_with_data` - Get project with all tasks
+- `mcp__ticktick__get_task_by_ids` - Get specific task details
+- `mcp__ticktick__create_task` - Create a new task
+- `mcp__ticktick__update_task` - Update an existing task
+- `mcp__ticktick__complete_task` - Mark a task as complete
+- `mcp__ticktick__delete_task` - Delete a task
+- `mcp__ticktick__create_project` - Create a new project/list
+- `mcp__ticktick__update_project` - Update a project
+- `mcp__ticktick__delete_project` - Delete a project
+
+Use TickTick when Chris asks about tasks, to-dos, or project management.
+
 ## GitHub
 
 You have a GitHub account: **seb-writes-code** (seb@chrisraible.com). Your PAT is stored in 1Password.
