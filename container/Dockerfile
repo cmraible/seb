@@ -24,13 +24,19 @@ RUN apt-get update && apt-get install -y \
     libxshmfence1 \
     curl \
     git \
+    gnupg \
     make \
     g++ \
     python3 \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
-    && apt-get update && apt-get install -y gh \
+    && curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/gpg.key | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main" > /etc/apt/sources.list.d/caddy-stable.list \
+    && apt-get update && apt-get install -y gh caddy default-mysql-server default-mysql-client \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Mailpit (email testing server)
+RUN curl -sL https://raw.githubusercontent.com/axllent/mailpit/develop/install.sh | bash
 
 # Set Chromium path for agent-browser
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
