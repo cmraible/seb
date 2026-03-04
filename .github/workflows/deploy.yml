@@ -56,32 +56,11 @@ jobs:
 
       - name: Restart NanoClaw
         run: |
-          # Detect service manager and restart accordingly
-          if systemctl --user is-active nanoclaw >/dev/null 2>&1; then
-            systemctl --user restart nanoclaw
-            echo "Restarted via systemctl --user"
-          elif systemctl is-active nanoclaw >/dev/null 2>&1; then
-            sudo systemctl restart nanoclaw
-            echo "Restarted via systemctl (system)"
-          elif [ -f "$PROJECT_ROOT/nanoclaw.pid" ]; then
-            # nohup fallback
-            bash "$PROJECT_ROOT/start-nanoclaw.sh"
-            echo "Restarted via nohup wrapper"
-          else
-            echo "::error::No known service manager found for nanoclaw"
-            exit 1
-          fi
+          systemctl --user restart nanoclaw
+          echo "Restarted via systemctl --user"
 
       - name: Verify service is running
         run: |
           sleep 5
-          if systemctl --user is-active nanoclaw >/dev/null 2>&1; then
-            echo "nanoclaw is active (systemctl --user)"
-          elif systemctl is-active nanoclaw >/dev/null 2>&1; then
-            echo "nanoclaw is active (systemctl system)"
-          elif [ -f "$PROJECT_ROOT/nanoclaw.pid" ] && kill -0 "$(cat "$PROJECT_ROOT/nanoclaw.pid")" 2>/dev/null; then
-            echo "nanoclaw is active (PID $(cat "$PROJECT_ROOT/nanoclaw.pid"))"
-          else
-            echo "::error::nanoclaw does not appear to be running after restart"
-            exit 1
-          fi
+          systemctl --user is-active nanoclaw
+          echo "nanoclaw is active"
