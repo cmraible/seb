@@ -158,6 +158,7 @@ export class TelegramChannel implements Channel {
         content,
         timestamp,
         is_from_me: false,
+        is_bot_message: ctx.from?.is_bot === true,
       });
 
       logger.info(
@@ -192,6 +193,7 @@ export class TelegramChannel implements Channel {
         content: `${placeholder}${caption}`,
         timestamp,
         is_from_me: false,
+        is_bot_message: ctx.from?.is_bot === true,
       });
     };
 

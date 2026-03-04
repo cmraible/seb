@@ -94,6 +94,7 @@ function createTextCtx(overrides: {
   fromId?: number;
   firstName?: string;
   username?: string;
+  isBot?: boolean;
   messageId?: number;
   date?: number;
   entities?: any[];
@@ -110,6 +111,7 @@ function createTextCtx(overrides: {
       id: overrides.fromId ?? 99001,
       first_name: overrides.firstName ?? 'Alice',
       username: overrides.username ?? 'alice_user',
+      is_bot: overrides.isBot ?? false,
     },
     message: {
       text: overrides.text,
@@ -128,6 +130,7 @@ function createMediaCtx(overrides: {
   chatType?: string;
   fromId?: number;
   firstName?: string;
+  isBot?: boolean;
   date?: number;
   messageId?: number;
   caption?: string;
@@ -144,6 +147,7 @@ function createMediaCtx(overrides: {
       id: overrides.fromId ?? 99001,
       first_name: overrides.firstName ?? 'Alice',
       username: 'alice_user',
+      is_bot: overrides.isBot ?? false,
     },
     message: {
       date: overrides.date ?? Math.floor(Date.now() / 1000),
@@ -388,6 +392,41 @@ describe('TelegramChannel', () => {
         'tg:100200300',
         expect.any(String),
         'Project Team',
+      );
+    });
+
+    it('sets is_bot_message=false for regular users', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const ctx = createTextCtx({ text: 'Hello', isBot: false });
+      await triggerTextMessage(ctx);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({ is_bot_message: false }),
+      );
+    });
+
+    it('sets is_bot_message=true for bot users', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const ctx = createTextCtx({
+        text: 'Automated response',
+        isBot: true,
+        firstName: 'OtherBot',
+      });
+      await triggerTextMessage(ctx);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({
+          is_bot_message: true,
+          sender_name: 'OtherBot',
+        }),
       );
     });
 
@@ -670,6 +709,20 @@ describe('TelegramChannel', () => {
       expect(opts.onMessage).toHaveBeenCalledWith(
         'tg:100200300',
         expect.objectContaining({ content: '[Contact]' }),
+      );
+    });
+
+    it('sets is_bot_message=true for media from bot users', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const ctx = createMediaCtx({ isBot: true });
+      await triggerMediaMessage('message:photo', ctx);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({ is_bot_message: true }),
       );
     });
 
