@@ -1,6 +1,15 @@
 import { Bot } from 'grammy';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
+import { readEnvFile } from '../env.js';
+import { logger } from '../logger.js';
+import { registerChannel, ChannelOpts } from './registry.js';
+import {
+  Channel,
+  OnChatMetadata,
+  OnInboundMessage,
+  RegisteredGroup,
+} from '../types.js';
 
 /** Sanitize a string for use as a folder name segment */
 function sanitize(s: string): string {
@@ -10,19 +19,12 @@ function sanitize(s: string): string {
     .replace(/^-|-$/g, '')
     .slice(0, 40);
 }
-import { logger } from '../logger.js';
-import {
-  Channel,
-  OnChatMetadata,
-  OnInboundMessage,
-  RegisteredGroup,
-} from '../types.js';
 
 export interface TelegramChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
-  registerGroup: (jid: string, group: RegisteredGroup) => void;
+  registerGroup?: (jid: string, group: RegisteredGroup) => void;
 }
 
 export class TelegramChannel implements Channel {
@@ -108,7 +110,12 @@ export class TelegramChannel implements Channel {
 
       // Auto-register topic groups on first trigger message
       const groups = this.opts.registeredGroups();
-      if (topicId && !groups[chatJid] && TRIGGER_PATTERN.test(content)) {
+      if (
+        topicId &&
+        !groups[chatJid] &&
+        TRIGGER_PATTERN.test(content) &&
+        this.opts.registerGroup
+      ) {
         const topicName =
           (ctx.message.reply_to_message as any)?.forum_topic_created?.name ||
           `topic-${topicId}`;
@@ -134,6 +141,13 @@ export class TelegramChannel implements Channel {
         );
         return;
       }
+
+      // React with eyes emoji so the user knows the message was seen
+      ctx
+        .react('👀')
+        .catch((err) =>
+          logger.debug({ chatJid, err }, 'Failed to react with eyes emoji'),
+        );
 
       // Deliver message — startMessageLoop() will pick it up
       this.opts.onMessage(chatJid, {
@@ -287,3 +301,17 @@ export class TelegramChannel implements Channel {
     }
   }
 }
+
+registerChannel('telegram', (opts: ChannelOpts) => {
+  const envVars = readEnvFile(['TELEGRAM_BOT_TOKEN']);
+  const token =
+    process.env.TELEGRAM_BOT_TOKEN || envVars.TELEGRAM_BOT_TOKEN || '';
+  if (!token) {
+    logger.warn('Telegram: TELEGRAM_BOT_TOKEN not set');
+    return null;
+  }
+  return new TelegramChannel(token, {
+    ...opts,
+    registerGroup: opts.registerGroup,
+  });
+});
