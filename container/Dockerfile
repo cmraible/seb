@@ -39,6 +39,17 @@ RUN apt-get update && apt-get install -y \
 RUN curl -fsSL https://github.com/SpaceK33z/tickrs/releases/download/v0.1.4/tickrs-x86_64-unknown-linux-musl.tar.gz \
     | tar -xz -C /usr/local/bin tickrs
 
+# Install Go toolchain (for Hubris project development)
+ENV GOLANG_VERSION=1.23.6
+RUN curl -fsSL "https://go.dev/dl/go${GOLANG_VERSION}.linux-$(dpkg --print-architecture).tar.gz" | tar -C /usr/local -xzf -
+ENV PATH="/usr/local/go/bin:/home/node/go/bin:${PATH}"
+ENV GOPATH="/home/node/go"
+
+# Install Go dev tools
+RUN go install github.com/a-h/templ/cmd/templ@latest && \
+    go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest && \
+    go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest
+
 # Install Mailpit (email testing server)
 RUN curl -sL https://raw.githubusercontent.com/axllent/mailpit/develop/install.sh | bash
 

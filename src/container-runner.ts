@@ -199,12 +199,13 @@ function buildVolumeMounts(
   });
 
   // Gmail credentials directory
-  const gmailDir = path.join(os.homedir(), '.gmail-mcp');
+  const homeDir = process.env.HOME || os.homedir();
+  const gmailDir = path.join(homeDir, '.gmail-mcp');
   if (fs.existsSync(gmailDir)) {
     mounts.push({
       hostPath: gmailDir,
       containerPath: '/home/node/.gmail-mcp',
-      readonly: false,  // MCP may need to refresh tokens
+      readonly: false, // MCP may need to refresh tokens
     });
   }
 
