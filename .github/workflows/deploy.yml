@@ -29,7 +29,12 @@ jobs:
 
     steps:
       - name: Pull latest changes
-        run: git -C "$PROJECT_ROOT" pull --ff-only origin main
+        run: |
+          cd "$PROJECT_ROOT"
+          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
+          git pull --ff-only origin main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install dependencies
         run: cd "$PROJECT_ROOT" && npm ci --prefer-offline
