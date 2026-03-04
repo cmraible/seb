@@ -13,17 +13,16 @@ import {
 } from './config.js';
 import { WhatsAppChannel } from './channels/whatsapp.js';
 import { TelegramChannel } from './channels/telegram.js';
-import { ensureContainerRuntimeRunning, cleanupOrphans } from './container-runtime.js';
+import {
+  cleanupOrphans,
+  ensureContainerRuntimeRunning,
+} from './container-runtime.js';
 import {
   ContainerOutput,
   runContainerAgent,
   writeGroupsSnapshot,
   writeTasksSnapshot,
 } from './container-runner.js';
-import {
-  cleanupOrphans,
-  ensureContainerRuntimeRunning,
-} from './container-runtime.js';
 import {
   getAllChats,
   getAllRegisteredGroups,
@@ -440,7 +439,6 @@ function recoverPendingMessages(): void {
     }
   }
 }
-
 
 async function main(): Promise<void> {
   ensureContainerRuntimeRunning();

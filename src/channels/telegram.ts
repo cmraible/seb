@@ -4,7 +4,11 @@ import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 
 /** Sanitize a string for use as a folder name segment */
 function sanitize(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 40);
 }
 import { logger } from '../logger.js';
 import {
@@ -63,7 +67,9 @@ export class TelegramChannel implements Channel {
       if (ctx.message.text.startsWith('/')) return;
 
       const topicId = ctx.message.message_thread_id;
-      const chatJid = topicId ? `tg:${ctx.chat.id}:${topicId}` : `tg:${ctx.chat.id}`;
+      const chatJid = topicId
+        ? `tg:${ctx.chat.id}:${topicId}`
+        : `tg:${ctx.chat.id}`;
       let content = ctx.message.text;
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
@@ -103,7 +109,9 @@ export class TelegramChannel implements Channel {
       // Auto-register topic groups on first trigger message
       const groups = this.opts.registeredGroups();
       if (topicId && !groups[chatJid] && TRIGGER_PATTERN.test(content)) {
-        const topicName = (ctx.message.reply_to_message as any)?.forum_topic_created?.name || `topic-${topicId}`;
+        const topicName =
+          (ctx.message.reply_to_message as any)?.forum_topic_created?.name ||
+          `topic-${topicId}`;
         const folderName = `tg-${sanitize(chatName)}-${sanitize(topicName)}`;
         this.opts.registerGroup(chatJid, {
           name: `${chatName} / ${topicName}`,
@@ -147,7 +155,9 @@ export class TelegramChannel implements Channel {
     // Handle non-text messages with placeholders so the agent knows something was sent
     const storeNonText = (ctx: any, placeholder: string) => {
       const topicId = ctx.message?.message_thread_id;
-      const chatJid = topicId ? `tg:${ctx.chat.id}:${topicId}` : `tg:${ctx.chat.id}`;
+      const chatJid = topicId
+        ? `tg:${ctx.chat.id}:${topicId}`
+        : `tg:${ctx.chat.id}`;
       const group = this.opts.registeredGroups()[chatJid];
       if (!group) return;
 
@@ -173,9 +183,7 @@ export class TelegramChannel implements Channel {
 
     this.bot.on('message:photo', (ctx) => storeNonText(ctx, '[Photo]'));
     this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
-    this.bot.on('message:voice', (ctx) =>
-      storeNonText(ctx, '[Voice message]'),
-    );
+    this.bot.on('message:voice', (ctx) => storeNonText(ctx, '[Voice message]'));
     this.bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
     this.bot.on('message:document', (ctx) => {
       const name = ctx.message.document?.file_name || 'file';
@@ -224,7 +232,9 @@ export class TelegramChannel implements Channel {
         return;
       }
       const [, chatId, topicId] = match;
-      const threadOpts = topicId ? { message_thread_id: parseInt(topicId, 10) } : {};
+      const threadOpts = topicId
+        ? { message_thread_id: parseInt(topicId, 10) }
+        : {};
 
       // Telegram has a 4096 character limit per message — split if needed
       const MAX_LENGTH = 4096;
@@ -267,7 +277,11 @@ export class TelegramChannel implements Channel {
       const match = jid.match(/^tg:(-?\d+)(?::(\d+))?$/);
       if (!match) return;
       const [, chatId, topicId] = match;
-      await this.bot.api.sendChatAction(chatId, 'typing', topicId ? { message_thread_id: parseInt(topicId, 10) } : undefined);
+      await this.bot.api.sendChatAction(
+        chatId,
+        'typing',
+        topicId ? { message_thread_id: parseInt(topicId, 10) } : undefined,
+      );
     } catch (err) {
       logger.debug({ jid, err }, 'Failed to send Telegram typing indicator');
     }
