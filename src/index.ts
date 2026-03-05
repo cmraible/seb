@@ -35,6 +35,7 @@ import {
   setRegisteredGroup,
   setRouterState,
   setSession,
+  recoverRunningTasks,
   storeChatMetadata,
   storeMessage,
 } from './db.js';
@@ -451,6 +452,12 @@ async function main(): Promise<void> {
   cleanupOrphans();
   initDatabase();
   logger.info('Database initialized');
+
+  const recovered = recoverRunningTasks();
+  if (recovered > 0) {
+    logger.info({ count: recovered }, 'Reset stuck running tasks to active');
+  }
+
   loadState();
 
   // Graceful shutdown handlers

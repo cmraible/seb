@@ -452,6 +452,21 @@ export function deleteTask(id: string): void {
   db.prepare('DELETE FROM scheduled_tasks WHERE id = ?').run(id);
 }
 
+/**
+ * Reset any tasks stuck in 'running' status back to 'active'.
+ * This handles the case where nanoclaw restarted while a task was running —
+ * the container and its output listener are gone, so the task needs to be
+ * re-queued for the next scheduled run.
+ */
+export function recoverRunningTasks(): number {
+  const result = db
+    .prepare(
+      `UPDATE scheduled_tasks SET status = 'active' WHERE status = 'running'`,
+    )
+    .run();
+  return result.changes;
+}
+
 export function getDueTasks(): ScheduledTask[] {
   const now = new Date().toISOString();
   return db
