@@ -162,7 +162,7 @@ You have read-write access to the user's Obsidian vault at `/workspace/extra/obs
 - Use `#tags` for categorisation
 - Frontmatter (YAML between `---` delimiters) is supported for metadata
 - The vault is live: changes you make appear in the user's Obsidian immediately
-- **ALL notes must be created inside `/workspace/extra/obsidian-vault/seb/`** — never directly in the vault root
+- Notes can be created directly in `/workspace/extra/obsidian-vault/` or in subfolders as appropriate
 
 When the user asks you to take notes, remember something long-term, or work on the knowledge base, use the vault.
 
