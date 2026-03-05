@@ -6,11 +6,25 @@ import { ASSISTANT_NAME, DATA_DIR, STORE_DIR } from './config.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import {
+  ContainerConfig,
   NewMessage,
   RegisteredGroup,
   ScheduledTask,
   TaskRunLog,
 } from './types.js';
+
+function parseContainerConfig(
+  raw: string | null,
+  jid: string,
+): ContainerConfig | undefined {
+  if (!raw) return undefined;
+  try {
+    return JSON.parse(raw) as ContainerConfig;
+  } catch (err) {
+    logger.warn({ jid, err }, 'Invalid container_config JSON, ignoring');
+    return undefined;
+  }
+}
 
 let db: Database.Database;
 
@@ -156,6 +170,11 @@ export function initDatabase(): void {
 export function _initTestDatabase(): void {
   db = new Database(':memory:');
   createSchema(db);
+}
+
+/** @internal - for tests only. Returns the raw database handle. */
+export function _getTestDb(): Database.Database {
+  return db;
 }
 
 /**
@@ -575,9 +594,7 @@ export function getRegisteredGroup(
     folder: row.folder,
     trigger: row.trigger_pattern,
     added_at: row.added_at,
-    containerConfig: row.container_config
-      ? JSON.parse(row.container_config)
-      : undefined,
+    containerConfig: parseContainerConfig(row.container_config, row.jid),
     requiresTrigger:
       row.requires_trigger === null ? undefined : row.requires_trigger === 1,
     isMain: row.is_main === 1 ? true : undefined,
@@ -628,9 +645,7 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
       folder: row.folder,
       trigger: row.trigger_pattern,
       added_at: row.added_at,
-      containerConfig: row.container_config
-        ? JSON.parse(row.container_config)
-        : undefined,
+      containerConfig: parseContainerConfig(row.container_config, row.jid),
       requiresTrigger:
         row.requires_trigger === null ? undefined : row.requires_trigger === 1,
       isMain: row.is_main === 1 ? true : undefined,

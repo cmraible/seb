@@ -1,11 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 
 import {
+  _getTestDb,
   _initTestDatabase,
   createTask,
   deleteTask,
   getAllChats,
   getAllRegisteredGroups,
+  getRegisteredGroup,
   getMessagesSince,
   getNewMessages,
   getTaskById,
@@ -423,6 +425,70 @@ describe('registered group isMain', () => {
     const group = groups['group@g.us'];
     expect(group).toBeDefined();
     expect(group.isMain).toBeUndefined();
+  });
+});
+
+// --- containerConfig JSON safety ---
+
+describe('containerConfig malformed JSON', () => {
+  it('getAllRegisteredGroups returns group with undefined containerConfig on bad JSON', () => {
+    // Insert a row with malformed container_config directly
+    const db = _getTestDb();
+    db.prepare(
+      `INSERT INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'bad@g.us',
+      'Bad Config Group',
+      'whatsapp_bad-config',
+      '@Andy',
+      '2024-01-01T00:00:00.000Z',
+      '{not valid json',
+      1,
+      0,
+    );
+
+    const groups = getAllRegisteredGroups();
+    const group = groups['bad@g.us'];
+    expect(group).toBeDefined();
+    expect(group.name).toBe('Bad Config Group');
+    expect(group.containerConfig).toBeUndefined();
+  });
+
+  it('getRegisteredGroup returns group with undefined containerConfig on bad JSON', () => {
+    const db = _getTestDb();
+    db.prepare(
+      `INSERT INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'bad2@g.us',
+      'Bad Config 2',
+      'whatsapp_bad-config-2',
+      '@Andy',
+      '2024-01-01T00:00:00.000Z',
+      '%%%',
+      1,
+      0,
+    );
+
+    const group = getRegisteredGroup('bad2@g.us');
+    expect(group).toBeDefined();
+    expect(group!.name).toBe('Bad Config 2');
+    expect(group!.containerConfig).toBeUndefined();
+  });
+
+  it('valid containerConfig still parses correctly', () => {
+    setRegisteredGroup('valid@g.us', {
+      name: 'Valid Config',
+      folder: 'whatsapp_valid-config',
+      trigger: '@Andy',
+      added_at: '2024-01-01T00:00:00.000Z',
+      containerConfig: { timeout: 60000 },
+    });
+
+    const group = getRegisteredGroup('valid@g.us');
+    expect(group).toBeDefined();
+    expect(group!.containerConfig).toEqual({ timeout: 60000 });
   });
 });
 
