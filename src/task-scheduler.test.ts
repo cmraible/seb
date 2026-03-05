@@ -126,4 +126,30 @@ describe('task scheduler', () => {
       (new Date(nextRun!).getTime() - new Date(scheduledTime).getTime()) % ms;
     expect(offset).toBe(0);
   });
+
+  it('computeNextRun falls back to now + interval when next_run is null', () => {
+    const ms = 60000;
+    const task = {
+      id: 'null-next-run',
+      group_folder: 'test',
+      chat_jid: 'test@g.us',
+      prompt: 'test',
+      schedule_type: 'interval' as const,
+      schedule_value: String(ms),
+      context_mode: 'isolated' as const,
+      next_run: null,
+      last_run: null,
+      last_result: null,
+      status: 'active' as const,
+      created_at: '2026-01-01T00:00:00.000Z',
+    };
+
+    const before = Date.now();
+    const nextRun = computeNextRun(task);
+    expect(nextRun).not.toBeNull();
+    const nextMs = new Date(nextRun!).getTime();
+    // Should be approximately now + interval
+    expect(nextMs).toBeGreaterThanOrEqual(before + ms);
+    expect(nextMs).toBeLessThanOrEqual(Date.now() + ms + 1000);
+  });
 });
