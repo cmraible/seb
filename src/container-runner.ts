@@ -223,6 +223,7 @@ function readSecrets(): Record<string, string> {
     'ANTHROPIC_AUTH_TOKEN',
     'OP_SERVICE_ACCOUNT_TOKEN',
     'OPENROUTER_API_KEY',
+    'GITHUB_TOKEN',
   ]);
 }
 
