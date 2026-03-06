@@ -110,6 +110,11 @@ describe('formatMessages', () => {
     );
   });
 
+  it('escapes special characters in timestamp', () => {
+    const result = formatMessages([makeMsg({ timestamp: '2024-01-01"&<>' })]);
+    expect(result).toContain('time="2024-01-01&quot;&amp;&lt;&gt;"');
+  });
+
   it('handles empty array', () => {
     const result = formatMessages([]);
     expect(result).toBe('<messages>\n\n</messages>');
