@@ -36,10 +36,6 @@ RUN apt-get update && apt-get install -y \
     && apt-get update && apt-get install -y gh caddy default-mysql-server default-mysql-client \
     && rm -rf /var/lib/apt/lists/*
 
-# Install tickrs (TickTick CLI) for task management
-RUN curl -fsSL https://github.com/SpaceK33z/tickrs/releases/download/v0.1.4/tickrs-x86_64-unknown-linux-musl.tar.gz \
-    | tar -xz -C /usr/local/bin tickrs
-
 # Install Go toolchain (for Hubris project development)
 ENV GOLANG_VERSION=1.23.6
 RUN curl -fsSL "https://go.dev/dl/go${GOLANG_VERSION}.linux-$(dpkg --print-architecture).tar.gz" | tar -C /usr/local -xzf -

@@ -515,13 +515,6 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Set TickTick env vars for the main group so Bash subprocesses (tickrs CLI) inherit them
-  if (containerInput.isMain) {
-    process.env.TICKTICK_CLIENT_ID = '96uFUM2la9v3HfGEwm';
-    process.env.TICKTICK_CLIENT_SECRET = 'yGYoklnClk10fdWN71I7Xfru9RlM7400';
-    process.env.TICKTICK_TOKEN = 'b5b0cc22-1e93-423c-8b34-7d03c02a8865';
-  }
-
   // Build SDK env: merge secrets into process.env for the SDK only.
   // Secrets never touch process.env itself, so Bash subprocesses can't see them.
   const sdkEnv: Record<string, string | undefined> = { ...process.env };
