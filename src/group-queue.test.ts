@@ -4,8 +4,13 @@ import { GroupQueue } from './group-queue.js';
 
 // Mock config to control concurrency limit
 vi.mock('./config.js', () => ({
-  DATA_DIR: '/tmp/nanoclaw-test-data',
   MAX_CONCURRENT_CONTAINERS: 2,
+}));
+
+// Mock group-folder to return a predictable IPC path
+vi.mock('./group-folder.js', () => ({
+  resolveGroupIpcPath: (folder: string) =>
+    `/tmp/nanoclaw-test-data/ipc/${folder}`,
 }));
 
 // Mock fs operations used by sendMessage/closeStdin
