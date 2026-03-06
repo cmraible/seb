@@ -1,0 +1,14 @@
+# Gitleaks configuration
+# https://github.com/gitleaks/gitleaks
+
+# Allowlist historical findings for revoked TickTick credentials (removed in PR #56)
+[allowlist]
+fingerprints = [
+  "180fdb84aa773fa913fa0c4f51e7c068dc260ca7:container/agent-runner/src/index.ts:generic-api-key:462",
+  "180fdb84aa773fa913fa0c4f51e7c068dc260ca7:container/agent-runner/src/index.ts:generic-api-key:463",
+  "2c22fb7a24cdb0a3d0a6e36171a73a3d8e199357:container/agent-runner/src/index.ts:generic-api-key:521",
+  "2c22fb7a24cdb0a3d0a6e36171a73a3d8e199357:container/agent-runner/src/index.ts:generic-api-key:522",
+  "3bebba85555f02217ff11340532926e128baff0f:container/agent-runner/src/index.ts:generic-api-key:522",
+  "5813c993bff33cef278d0ebc7e4fdefe58622591:container/agent-runner/src/index.ts:generic-api-key:461",
+  "5813c993bff33cef278d0ebc7e4fdefe58622591:container/agent-runner/src/index.ts:generic-api-key:462",
+]
