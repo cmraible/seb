@@ -51,14 +51,15 @@ export const MAX_CONCURRENT_CONTAINERS = Math.max(
   parseIntEnv('MAX_CONCURRENT_CONTAINERS', 5),
 );
 
-function escapeRegex(str: string): string {
+export function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-export const TRIGGER_PATTERN = new RegExp(
-  `^@${escapeRegex(ASSISTANT_NAME)}\\b`,
-  'i',
-);
+export function buildTriggerPattern(name: string): RegExp {
+  return new RegExp(`^@${escapeRegex(name)}\\b`, 'i');
+}
+
+export const TRIGGER_PATTERN = buildTriggerPattern(ASSISTANT_NAME);
 
 // Goodbye message sent when a container idles out after having sent output.
 // Set to empty string to disable.
