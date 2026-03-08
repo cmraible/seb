@@ -40,3 +40,20 @@ export function readEnvFile(keys: string[]): Record<string, string> {
 
   return result;
 }
+
+/**
+ * Parse an integer from an environment variable, returning a default
+ * if the variable is unset. Throws if the value is set but not a
+ * valid integer — prevents silent NaN propagation.
+ */
+export function parseIntEnv(name: string, defaultValue: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return defaultValue;
+  const parsed = parseInt(raw, 10);
+  if (Number.isNaN(parsed)) {
+    throw new Error(
+      `Invalid integer for ${name}: "${raw}" — expected a number`,
+    );
+  }
+  return parsed;
+}

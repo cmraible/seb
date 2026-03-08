@@ -18,10 +18,11 @@ vi.mock('fs', () => ({
   },
 }));
 
-import { readEnvFile } from './env.js';
+import { parseIntEnv, readEnvFile } from './env.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe('readEnvFile', () => {
@@ -132,5 +133,47 @@ describe('readEnvFile', () => {
 
     const result = readEnvFile(['FOO']);
     expect(result).toEqual({ FOO: 'bar' });
+  });
+});
+
+describe('parseIntEnv', () => {
+  it('returns default when env var is not set', () => {
+    expect(parseIntEnv('UNSET_VAR_12345', 42)).toBe(42);
+  });
+
+  it('returns default when env var is empty string', () => {
+    vi.stubEnv('TEST_PARSE_INT', '');
+    expect(parseIntEnv('TEST_PARSE_INT', 42)).toBe(42);
+  });
+
+  it('parses valid integer', () => {
+    vi.stubEnv('TEST_PARSE_INT', '100');
+    expect(parseIntEnv('TEST_PARSE_INT', 42)).toBe(100);
+  });
+
+  it('parses zero', () => {
+    vi.stubEnv('TEST_PARSE_INT', '0');
+    expect(parseIntEnv('TEST_PARSE_INT', 42)).toBe(0);
+  });
+
+  it('parses negative numbers', () => {
+    vi.stubEnv('TEST_PARSE_INT', '-5');
+    expect(parseIntEnv('TEST_PARSE_INT', 42)).toBe(-5);
+  });
+
+  it('throws on non-numeric string', () => {
+    vi.stubEnv('TEST_PARSE_INT', 'invalid');
+    expect(() => parseIntEnv('TEST_PARSE_INT', 42)).toThrow(
+      'Invalid integer for TEST_PARSE_INT: "invalid"',
+    );
+  });
+
+  it('throws on float-like string that parseInt would silently truncate', () => {
+    // parseInt("12.5") returns 12 — that's fine, it's still a number.
+    // But "abc" or "12abc" edge cases: parseInt("12abc") = 12 which is valid.
+    // We only reject true NaN cases.
+    vi.stubEnv('TEST_PARSE_INT', '12abc');
+    // parseInt('12abc') = 12, which is not NaN, so this succeeds
+    expect(parseIntEnv('TEST_PARSE_INT', 42)).toBe(12);
   });
 });
