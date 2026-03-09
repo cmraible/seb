@@ -119,7 +119,10 @@ describe('formatMessages', () => {
 
   it('escapes special characters in formatted timestamp', () => {
     // formatLocalTime processes the timestamp, then escapeXml is applied to the result
-    const result = formatMessages([makeMsg({ timestamp: '2024-01-01T00:00:00.000Z' })], TZ);
+    const result = formatMessages(
+      [makeMsg({ timestamp: '2024-01-01T00:00:00.000Z' })],
+      TZ,
+    );
     // Verify the time attribute is present and properly formatted
     expect(result).toMatch(/time="[^"]+"/);
   });
