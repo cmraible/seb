@@ -209,6 +209,16 @@ function buildVolumeMounts(
     });
   }
 
+  // Obsidian vault (shared knowledge base across all groups)
+  const obsidianDir = path.join(homeDir, 'obsidian-vault');
+  if (fs.existsSync(obsidianDir)) {
+    mounts.push({
+      hostPath: obsidianDir,
+      containerPath: '/workspace/extra/obsidian-vault',
+      readonly: false,
+    });
+  }
+
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {
     const validatedMounts = validateAdditionalMounts(
@@ -234,6 +244,7 @@ function readSecrets(): Record<string, string> {
     'ANTHROPIC_AUTH_TOKEN',
     'OP_SERVICE_ACCOUNT_TOKEN',
     'OPENROUTER_API_KEY',
+    'GITHUB_TOKEN',
   ]);
 }
 
@@ -700,7 +711,6 @@ export function writeGroupsSnapshot(
   groupFolder: string,
   isMain: boolean,
   groups: AvailableGroup[],
-  registeredJids: Set<string>,
 ): void {
   const groupIpcDir = resolveGroupIpcPath(groupFolder);
   fs.mkdirSync(groupIpcDir, { recursive: true });

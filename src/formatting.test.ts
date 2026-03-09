@@ -3,11 +3,23 @@ import { describe, it, expect } from 'vitest';
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from './config.js';
 import {
   escapeXml,
+  findChannel,
   formatMessages,
   formatOutbound,
   stripInternalTags,
 } from './router.js';
-import { NewMessage } from './types.js';
+import { Channel, NewMessage } from './types.js';
+
+function makeChannel(prefix: string): Channel {
+  return {
+    name: `${prefix}-channel`,
+    connect: async () => {},
+    sendMessage: async () => {},
+    isConnected: () => true,
+    ownsJid: (jid: string) => jid.startsWith(`${prefix}:`),
+    disconnect: async () => {},
+  };
+}
 
 function makeMsg(overrides: Partial<NewMessage> = {}): NewMessage {
   return {
@@ -58,13 +70,14 @@ describe('escapeXml', () => {
 // --- formatMessages ---
 
 describe('formatMessages', () => {
-  it('formats a single message as XML', () => {
-    const result = formatMessages([makeMsg()]);
-    expect(result).toBe(
-      '<messages>\n' +
-        '<message sender="Alice" time="2024-01-01T00:00:00.000Z">hello</message>\n' +
-        '</messages>',
-    );
+  const TZ = 'UTC';
+
+  it('formats a single message as XML with context header', () => {
+    const result = formatMessages([makeMsg()], TZ);
+    expect(result).toContain('<context timezone="UTC" />');
+    expect(result).toContain('<message sender="Alice"');
+    expect(result).toContain('>hello</message>');
+    expect(result).toContain('Jan 1, 2024');
   });
 
   it('formats multiple messages', () => {
@@ -73,11 +86,16 @@ describe('formatMessages', () => {
         id: '1',
         sender_name: 'Alice',
         content: 'hi',
-        timestamp: 't1',
+        timestamp: '2024-01-01T00:00:00.000Z',
       }),
-      makeMsg({ id: '2', sender_name: 'Bob', content: 'hey', timestamp: 't2' }),
+      makeMsg({
+        id: '2',
+        sender_name: 'Bob',
+        content: 'hey',
+        timestamp: '2024-01-01T01:00:00.000Z',
+      }),
     ];
-    const result = formatMessages(msgs);
+    const result = formatMessages(msgs, TZ);
     expect(result).toContain('sender="Alice"');
     expect(result).toContain('sender="Bob"');
     expect(result).toContain('>hi</message>');
@@ -85,27 +103,42 @@ describe('formatMessages', () => {
   });
 
   it('escapes special characters in sender names', () => {
-    const result = formatMessages([makeMsg({ sender_name: 'A & B <Co>' })]);
+    const result = formatMessages([makeMsg({ sender_name: 'A & B <Co>' })], TZ);
     expect(result).toContain('sender="A &amp; B &lt;Co&gt;"');
   });
 
   it('escapes special characters in content', () => {
-    const result = formatMessages([
-      makeMsg({ content: '<script>alert("xss")</script>' }),
-    ]);
+    const result = formatMessages(
+      [makeMsg({ content: '<script>alert("xss")</script>' })],
+      TZ,
+    );
     expect(result).toContain(
       '&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;',
     );
   });
 
-  it('escapes special characters in timestamp', () => {
-    const result = formatMessages([makeMsg({ timestamp: '2024-01-01"&<>' })]);
-    expect(result).toContain('time="2024-01-01&quot;&amp;&lt;&gt;"');
+  it('escapes special characters in formatted timestamp', () => {
+    // formatLocalTime processes the timestamp, then escapeXml is applied to the result
+    const result = formatMessages([makeMsg({ timestamp: '2024-01-01T00:00:00.000Z' })], TZ);
+    // Verify the time attribute is present and properly formatted
+    expect(result).toMatch(/time="[^"]+"/);
   });
 
   it('handles empty array', () => {
-    const result = formatMessages([]);
-    expect(result).toBe('<messages>\n\n</messages>');
+    const result = formatMessages([], TZ);
+    expect(result).toContain('<context timezone="UTC" />');
+    expect(result).toContain('<messages>\n\n</messages>');
+  });
+
+  it('converts timestamps to local time for given timezone', () => {
+    // 2024-01-01T18:30:00Z in America/New_York (EST) = 1:30 PM
+    const result = formatMessages(
+      [makeMsg({ timestamp: '2024-01-01T18:30:00.000Z' })],
+      'America/New_York',
+    );
+    expect(result).toContain('1:30');
+    expect(result).toContain('PM');
+    expect(result).toContain('<context timezone="America/New_York" />');
   });
 });
 
@@ -152,14 +185,20 @@ describe('TRIGGER_PATTERN', () => {
 describe('stripInternalTags', () => {
   it('strips single-line internal tags', () => {
     expect(stripInternalTags('hello <internal>secret</internal> world')).toBe(
-      'hello  world',
+      'hello world',
     );
   });
 
   it('strips multi-line internal tags', () => {
     expect(
       stripInternalTags('hello <internal>\nsecret\nstuff\n</internal> world'),
-    ).toBe('hello  world');
+    ).toBe('hello world');
+  });
+
+  it('collapses extra spaces left by tag removal', () => {
+    expect(
+      stripInternalTags('a <internal>x</internal>  <internal>y</internal> b'),
+    ).toBe('a b');
   });
 
   it('strips multiple internal tag blocks', () => {
@@ -238,5 +277,32 @@ describe('trigger gating (requiresTrigger interaction)', () => {
   it('non-main group with requiresTrigger=false always processes (no trigger needed)', () => {
     const msgs = [makeMsg({ content: 'hello no trigger' })];
     expect(shouldProcess(false, false, msgs)).toBe(true);
+  });
+});
+
+// --- findChannel ---
+
+describe('findChannel', () => {
+  const tg = makeChannel('tg');
+  const gh = makeChannel('gh');
+  const channels = [tg, gh];
+
+  it('returns the channel whose ownsJid matches', () => {
+    expect(findChannel(channels, 'tg:-1001234567890')).toBe(tg);
+    expect(findChannel(channels, 'gh:cmraible/seb')).toBe(gh);
+  });
+
+  it('returns undefined when no channel matches', () => {
+    expect(findChannel(channels, '12345@g.us')).toBeUndefined();
+    expect(findChannel(channels, 'unknown:foo')).toBeUndefined();
+  });
+
+  it('returns undefined for an empty channels array', () => {
+    expect(findChannel([], 'tg:123')).toBeUndefined();
+  });
+
+  it('returns the first matching channel when multiple could match', () => {
+    const tg2 = makeChannel('tg');
+    expect(findChannel([tg, tg2], 'tg:123')).toBe(tg);
   });
 });

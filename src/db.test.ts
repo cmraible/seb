@@ -1,11 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 
 import {
+  _getTestDb,
   _initTestDatabase,
   createTask,
   deleteTask,
   getAllChats,
   getAllRegisteredGroups,
+  getRegisteredGroup,
   getMessagesSince,
   getNewMessages,
   getTaskById,
@@ -392,6 +394,64 @@ describe('task CRUD', () => {
   });
 });
 
+// --- LIMIT behavior ---
+
+describe('message query LIMIT', () => {
+  beforeEach(() => {
+    storeChatMetadata('group@g.us', '2024-01-01T00:00:00.000Z');
+
+    for (let i = 1; i <= 10; i++) {
+      store({
+        id: `lim-${i}`,
+        chat_jid: 'group@g.us',
+        sender: 'user@s.whatsapp.net',
+        sender_name: 'User',
+        content: `message ${i}`,
+        timestamp: `2024-01-01T00:00:${String(i).padStart(2, '0')}.000Z`,
+      });
+    }
+  });
+
+  it('getNewMessages caps to limit and returns most recent in chronological order', () => {
+    const { messages, newTimestamp } = getNewMessages(
+      ['group@g.us'],
+      '2024-01-01T00:00:00.000Z',
+      'Andy',
+      3,
+    );
+    expect(messages).toHaveLength(3);
+    expect(messages[0].content).toBe('message 8');
+    expect(messages[2].content).toBe('message 10');
+    // Chronological order preserved
+    expect(messages[1].timestamp > messages[0].timestamp).toBe(true);
+    // newTimestamp reflects latest returned row
+    expect(newTimestamp).toBe('2024-01-01T00:00:10.000Z');
+  });
+
+  it('getMessagesSince caps to limit and returns most recent in chronological order', () => {
+    const messages = getMessagesSince(
+      'group@g.us',
+      '2024-01-01T00:00:00.000Z',
+      'Andy',
+      3,
+    );
+    expect(messages).toHaveLength(3);
+    expect(messages[0].content).toBe('message 8');
+    expect(messages[2].content).toBe('message 10');
+    expect(messages[1].timestamp > messages[0].timestamp).toBe(true);
+  });
+
+  it('returns all messages when count is under the limit', () => {
+    const { messages } = getNewMessages(
+      ['group@g.us'],
+      '2024-01-01T00:00:00.000Z',
+      'Andy',
+      50,
+    );
+    expect(messages).toHaveLength(10);
+  });
+});
+
 // --- RegisteredGroup isMain round-trip ---
 
 describe('registered group isMain', () => {
@@ -423,6 +483,70 @@ describe('registered group isMain', () => {
     const group = groups['group@g.us'];
     expect(group).toBeDefined();
     expect(group.isMain).toBeUndefined();
+  });
+});
+
+// --- containerConfig JSON safety ---
+
+describe('containerConfig malformed JSON', () => {
+  it('getAllRegisteredGroups returns group with undefined containerConfig on bad JSON', () => {
+    // Insert a row with malformed container_config directly
+    const db = _getTestDb();
+    db.prepare(
+      `INSERT INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'bad@g.us',
+      'Bad Config Group',
+      'whatsapp_bad-config',
+      '@Andy',
+      '2024-01-01T00:00:00.000Z',
+      '{not valid json',
+      1,
+      0,
+    );
+
+    const groups = getAllRegisteredGroups();
+    const group = groups['bad@g.us'];
+    expect(group).toBeDefined();
+    expect(group.name).toBe('Bad Config Group');
+    expect(group.containerConfig).toBeUndefined();
+  });
+
+  it('getRegisteredGroup returns group with undefined containerConfig on bad JSON', () => {
+    const db = _getTestDb();
+    db.prepare(
+      `INSERT INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'bad2@g.us',
+      'Bad Config 2',
+      'whatsapp_bad-config-2',
+      '@Andy',
+      '2024-01-01T00:00:00.000Z',
+      '%%%',
+      1,
+      0,
+    );
+
+    const group = getRegisteredGroup('bad2@g.us');
+    expect(group).toBeDefined();
+    expect(group!.name).toBe('Bad Config 2');
+    expect(group!.containerConfig).toBeUndefined();
+  });
+
+  it('valid containerConfig still parses correctly', () => {
+    setRegisteredGroup('valid@g.us', {
+      name: 'Valid Config',
+      folder: 'whatsapp_valid-config',
+      trigger: '@Andy',
+      added_at: '2024-01-01T00:00:00.000Z',
+      containerConfig: { timeout: 60000 },
+    });
+
+    const group = getRegisteredGroup('valid@g.us');
+    expect(group).toBeDefined();
+    expect(group!.containerConfig).toEqual({ timeout: 60000 });
   });
 });
 

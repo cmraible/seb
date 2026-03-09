@@ -36,9 +36,9 @@ RUN apt-get update && apt-get install -y \
     && apt-get update && apt-get install -y gh caddy default-mysql-server default-mysql-client \
     && rm -rf /var/lib/apt/lists/*
 
-# Install tickrs (TickTick CLI) for task management
-RUN curl -fsSL https://github.com/SpaceK33z/tickrs/releases/download/v0.1.4/tickrs-x86_64-unknown-linux-musl.tar.gz \
-    | tar -xz -C /usr/local/bin tickrs
+# Install gitleaks for pre-commit secret scanning
+RUN curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.24.0/gitleaks_8.24.0_linux_x64.tar.gz \
+    | tar -xz -C /usr/local/bin gitleaks
 
 # Install Go toolchain (for Hubris project development)
 ENV GOLANG_VERSION=1.23.6

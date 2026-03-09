@@ -74,7 +74,7 @@ describe('schedule_task authorization', () => {
         type: 'schedule_task',
         prompt: 'do something',
         schedule_type: 'once',
-        schedule_value: '2025-06-01T00:00:00.000Z',
+        schedule_value: '2025-06-01T00:00:00',
         targetJid: 'other@g.us',
       },
       'whatsapp_main',
@@ -94,7 +94,7 @@ describe('schedule_task authorization', () => {
         type: 'schedule_task',
         prompt: 'self task',
         schedule_type: 'once',
-        schedule_value: '2025-06-01T00:00:00.000Z',
+        schedule_value: '2025-06-01T00:00:00',
         targetJid: 'other@g.us',
       },
       'other-group',
@@ -113,7 +113,7 @@ describe('schedule_task authorization', () => {
         type: 'schedule_task',
         prompt: 'unauthorized',
         schedule_type: 'once',
-        schedule_value: '2025-06-01T00:00:00.000Z',
+        schedule_value: '2025-06-01T00:00:00',
         targetJid: 'main@g.us',
       },
       'other-group',
@@ -131,7 +131,7 @@ describe('schedule_task authorization', () => {
         type: 'schedule_task',
         prompt: 'no target',
         schedule_type: 'once',
-        schedule_value: '2025-06-01T00:00:00.000Z',
+        schedule_value: '2025-06-01T00:00:00',
         targetJid: 'unknown@g.us',
       },
       'whatsapp_main',
@@ -154,7 +154,7 @@ describe('pause_task authorization', () => {
       chat_jid: 'main@g.us',
       prompt: 'main task',
       schedule_type: 'once',
-      schedule_value: '2025-06-01T00:00:00.000Z',
+      schedule_value: '2025-06-01T00:00:00',
       context_mode: 'isolated',
       next_run: '2025-06-01T00:00:00.000Z',
       status: 'active',
@@ -166,7 +166,7 @@ describe('pause_task authorization', () => {
       chat_jid: 'other@g.us',
       prompt: 'other task',
       schedule_type: 'once',
-      schedule_value: '2025-06-01T00:00:00.000Z',
+      schedule_value: '2025-06-01T00:00:00',
       context_mode: 'isolated',
       next_run: '2025-06-01T00:00:00.000Z',
       status: 'active',
@@ -215,7 +215,7 @@ describe('resume_task authorization', () => {
       chat_jid: 'other@g.us',
       prompt: 'paused task',
       schedule_type: 'once',
-      schedule_value: '2025-06-01T00:00:00.000Z',
+      schedule_value: '2025-06-01T00:00:00',
       context_mode: 'isolated',
       next_run: '2025-06-01T00:00:00.000Z',
       status: 'paused',
@@ -264,7 +264,7 @@ describe('cancel_task authorization', () => {
       chat_jid: 'other@g.us',
       prompt: 'cancel me',
       schedule_type: 'once',
-      schedule_value: '2025-06-01T00:00:00.000Z',
+      schedule_value: '2025-06-01T00:00:00',
       context_mode: 'isolated',
       next_run: null,
       status: 'active',
@@ -287,7 +287,7 @@ describe('cancel_task authorization', () => {
       chat_jid: 'other@g.us',
       prompt: 'my task',
       schedule_type: 'once',
-      schedule_value: '2025-06-01T00:00:00.000Z',
+      schedule_value: '2025-06-01T00:00:00',
       context_mode: 'isolated',
       next_run: null,
       status: 'active',
@@ -310,7 +310,7 @@ describe('cancel_task authorization', () => {
       chat_jid: 'main@g.us',
       prompt: 'not yours',
       schedule_type: 'once',
-      schedule_value: '2025-06-01T00:00:00.000Z',
+      schedule_value: '2025-06-01T00:00:00',
       context_mode: 'isolated',
       next_run: null,
       status: 'active',
@@ -586,7 +586,7 @@ describe('schedule_task context_mode', () => {
         type: 'schedule_task',
         prompt: 'group context',
         schedule_type: 'once',
-        schedule_value: '2025-06-01T00:00:00.000Z',
+        schedule_value: '2025-06-01T00:00:00',
         context_mode: 'group',
         targetJid: 'other@g.us',
       },
@@ -605,7 +605,7 @@ describe('schedule_task context_mode', () => {
         type: 'schedule_task',
         prompt: 'isolated context',
         schedule_type: 'once',
-        schedule_value: '2025-06-01T00:00:00.000Z',
+        schedule_value: '2025-06-01T00:00:00',
         context_mode: 'isolated',
         targetJid: 'other@g.us',
       },
@@ -624,7 +624,7 @@ describe('schedule_task context_mode', () => {
         type: 'schedule_task',
         prompt: 'bad context',
         schedule_type: 'once',
-        schedule_value: '2025-06-01T00:00:00.000Z',
+        schedule_value: '2025-06-01T00:00:00',
         context_mode: 'bogus' as any,
         targetJid: 'other@g.us',
       },
@@ -643,7 +643,7 @@ describe('schedule_task context_mode', () => {
         type: 'schedule_task',
         prompt: 'no context mode',
         schedule_type: 'once',
-        schedule_value: '2025-06-01T00:00:00.000Z',
+        schedule_value: '2025-06-01T00:00:00',
         targetJid: 'other@g.us',
       },
       'whatsapp_main',
@@ -695,5 +695,184 @@ describe('register_group success', () => {
     );
 
     expect(getRegisteredGroup('partial@g.us')).toBeUndefined();
+  });
+});
+
+// --- update_task authorization ---
+
+describe('update_task authorization', () => {
+  beforeEach(() => {
+    createTask({
+      id: 'task-update-main',
+      group_folder: 'whatsapp_main',
+      chat_jid: 'main@g.us',
+      prompt: 'main task to update',
+      schedule_type: 'once',
+      schedule_value: '2025-06-01T00:00:00',
+      context_mode: 'isolated',
+      next_run: '2025-06-01T00:00:00.000Z',
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+    createTask({
+      id: 'task-update-other',
+      group_folder: 'other-group',
+      chat_jid: 'other@g.us',
+      prompt: 'other task to update',
+      schedule_type: 'once',
+      schedule_value: '2025-06-01T00:00:00',
+      context_mode: 'isolated',
+      next_run: '2025-06-01T00:00:00.000Z',
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+  });
+
+  it('main group can update any task prompt', async () => {
+    await processTaskIpc(
+      { type: 'update_task', taskId: 'task-update-other', prompt: 'updated' },
+      'whatsapp_main',
+      true,
+      deps,
+    );
+    expect(getTaskById('task-update-other')!.prompt).toBe('updated');
+  });
+
+  it('non-main group can update its own task', async () => {
+    await processTaskIpc(
+      {
+        type: 'update_task',
+        taskId: 'task-update-other',
+        prompt: 'self-updated',
+      },
+      'other-group',
+      false,
+      deps,
+    );
+    expect(getTaskById('task-update-other')!.prompt).toBe('self-updated');
+  });
+
+  it('non-main group cannot update another groups task', async () => {
+    await processTaskIpc(
+      {
+        type: 'update_task',
+        taskId: 'task-update-main',
+        prompt: 'hijacked',
+      },
+      'other-group',
+      false,
+      deps,
+    );
+    expect(getTaskById('task-update-main')!.prompt).toBe('main task to update');
+  });
+
+  it('update_task with nonexistent taskId is a no-op', async () => {
+    await processTaskIpc(
+      { type: 'update_task', taskId: 'nonexistent', prompt: 'nope' },
+      'whatsapp_main',
+      true,
+      deps,
+    );
+    // No crash, no side effects
+    expect(getTaskById('nonexistent')).toBeUndefined();
+  });
+});
+
+// --- update_task schedule changes ---
+
+describe('update_task schedule changes', () => {
+  beforeEach(() => {
+    createTask({
+      id: 'task-sched',
+      group_folder: 'whatsapp_main',
+      chat_jid: 'main@g.us',
+      prompt: 'schedule task',
+      schedule_type: 'once',
+      schedule_value: '2025-06-01T00:00:00',
+      context_mode: 'isolated',
+      next_run: '2025-06-01T00:00:00.000Z',
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+  });
+
+  it('updates schedule_type to cron and recomputes next_run', async () => {
+    await processTaskIpc(
+      {
+        type: 'update_task',
+        taskId: 'task-sched',
+        schedule_type: 'cron',
+        schedule_value: '0 9 * * *',
+      },
+      'whatsapp_main',
+      true,
+      deps,
+    );
+
+    const task = getTaskById('task-sched')!;
+    expect(task.schedule_type).toBe('cron');
+    expect(task.schedule_value).toBe('0 9 * * *');
+    expect(task.next_run).toBeTruthy();
+    expect(new Date(task.next_run!).getTime()).toBeGreaterThan(
+      Date.now() - 60000,
+    );
+  });
+
+  it('updates schedule_type to interval and recomputes next_run', async () => {
+    const before = Date.now();
+    await processTaskIpc(
+      {
+        type: 'update_task',
+        taskId: 'task-sched',
+        schedule_type: 'interval',
+        schedule_value: '7200000',
+      },
+      'whatsapp_main',
+      true,
+      deps,
+    );
+
+    const task = getTaskById('task-sched')!;
+    expect(task.schedule_type).toBe('interval');
+    const nextRun = new Date(task.next_run!).getTime();
+    expect(nextRun).toBeGreaterThanOrEqual(before + 7200000 - 1000);
+    expect(nextRun).toBeLessThanOrEqual(Date.now() + 7200000 + 1000);
+  });
+
+  it('rejects invalid cron in update', async () => {
+    await processTaskIpc(
+      {
+        type: 'update_task',
+        taskId: 'task-sched',
+        schedule_type: 'cron',
+        schedule_value: 'not valid cron',
+      },
+      'whatsapp_main',
+      true,
+      deps,
+    );
+
+    // Task should remain unchanged
+    const task = getTaskById('task-sched')!;
+    expect(task.schedule_type).toBe('once');
+    expect(task.schedule_value).toBe('2025-06-01T00:00:00');
+  });
+
+  it('updates only prompt without changing schedule', async () => {
+    await processTaskIpc(
+      {
+        type: 'update_task',
+        taskId: 'task-sched',
+        prompt: 'new prompt only',
+      },
+      'whatsapp_main',
+      true,
+      deps,
+    );
+
+    const task = getTaskById('task-sched')!;
+    expect(task.prompt).toBe('new prompt only');
+    expect(task.schedule_type).toBe('once');
+    expect(task.next_run).toBe('2025-06-01T00:00:00.000Z');
   });
 });

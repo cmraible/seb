@@ -2,7 +2,8 @@ import { ChildProcess } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
-import { DATA_DIR, MAX_CONCURRENT_CONTAINERS } from './config.js';
+import { MAX_CONCURRENT_CONTAINERS } from './config.js';
+import { resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 
 interface QueuedTask {
@@ -163,8 +164,11 @@ export class GroupQueue {
       return false;
     state.idleWaiting = false; // Agent is about to receive work, no longer idle
 
-    const inputDir = path.join(DATA_DIR, 'ipc', state.groupFolder, 'input');
     try {
+      const inputDir = path.join(
+        resolveGroupIpcPath(state.groupFolder),
+        'input',
+      );
       fs.mkdirSync(inputDir, { recursive: true });
       const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}.json`;
       const filepath = path.join(inputDir, filename);
@@ -172,7 +176,8 @@ export class GroupQueue {
       fs.writeFileSync(tempPath, JSON.stringify({ type: 'message', text }));
       fs.renameSync(tempPath, filepath);
       return true;
-    } catch {
+    } catch (err) {
+      logger.warn({ groupJid, err }, 'Failed to write IPC message file');
       return false;
     }
   }
@@ -184,12 +189,15 @@ export class GroupQueue {
     const state = this.getGroup(groupJid);
     if (!state.active || !state.groupFolder) return;
 
-    const inputDir = path.join(DATA_DIR, 'ipc', state.groupFolder, 'input');
     try {
+      const inputDir = path.join(
+        resolveGroupIpcPath(state.groupFolder),
+        'input',
+      );
       fs.mkdirSync(inputDir, { recursive: true });
       fs.writeFileSync(path.join(inputDir, '_close'), '');
-    } catch {
-      // ignore
+    } catch (err) {
+      logger.warn({ groupJid, err }, 'Failed to write IPC close sentinel');
     }
   }
 

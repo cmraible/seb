@@ -34,10 +34,18 @@ export function computeNextRun(task: ScheduledTask): string | null {
   const now = Date.now();
 
   if (task.schedule_type === 'cron') {
-    const interval = CronExpressionParser.parse(task.schedule_value, {
-      tz: TIMEZONE,
-    });
-    return interval.next().toISOString();
+    try {
+      const interval = CronExpressionParser.parse(task.schedule_value, {
+        tz: TIMEZONE,
+      });
+      return interval.next().toISOString();
+    } catch {
+      logger.warn(
+        { taskId: task.id, value: task.schedule_value },
+        'Invalid cron expression, cannot compute next run',
+      );
+      return null;
+    }
   }
 
   if (task.schedule_type === 'interval') {
@@ -52,7 +60,12 @@ export function computeNextRun(task: ScheduledTask): string | null {
     }
     // Anchor to the scheduled time, not now, to prevent drift.
     // Skip past any missed intervals so we always land in the future.
-    let next = new Date(task.next_run!).getTime() + ms;
+    const anchor = task.next_run ? new Date(task.next_run).getTime() : NaN;
+    if (!anchor || anchor <= 0) {
+      // next_run is null or invalid — fall back to now + interval
+      return new Date(now + ms).toISOString();
+    }
+    let next = anchor + ms;
     while (next <= now) {
       next += ms;
     }
@@ -205,7 +218,7 @@ async function runTask(
     if (output.status === 'error') {
       error = output.error || 'Unknown error';
     } else if (output.result) {
-      // Messages are sent via MCP tool (IPC), result text is just logged
+      // Result was already forwarded to the user via the streaming callback above
       result = output.result;
     }
 
