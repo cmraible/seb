@@ -39,7 +39,7 @@ import {
   storeMessage,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
-import { resolveGroupFolderPath } from './group-folder.js';
+import { copyGroupTemplate, resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import {
@@ -116,6 +116,16 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
 
   // Create group folder
   fs.mkdirSync(path.join(groupDir, 'logs'), { recursive: true });
+
+  // Copy CLAUDE.md template if one matches this folder pattern
+  try {
+    copyGroupTemplate(group.folder);
+  } catch (err) {
+    logger.warn(
+      { folder: group.folder, err },
+      'Failed to copy group template',
+    );
+  }
 
   logger.info(
     { jid, name: group.name, folder: group.folder },

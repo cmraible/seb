@@ -13,6 +13,7 @@ logs/
 groups/*
 !groups/main/
 !groups/global/
+!groups/_templates/
 groups/main/*
 groups/global/*
 !groups/main/CLAUDE.md

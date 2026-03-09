@@ -1,3 +1,4 @@
+import fs from 'fs';
 import path from 'path';
 
 import { DATA_DIR, GROUPS_DIR } from './config.js';
@@ -33,6 +34,39 @@ export function resolveGroupFolderPath(folder: string): string {
   const groupPath = path.resolve(GROUPS_DIR, folder);
   ensureWithinBase(GROUPS_DIR, groupPath);
   return groupPath;
+}
+
+const TEMPLATES_DIR = path.resolve(GROUPS_DIR, '_templates');
+
+/**
+ * Copy a CLAUDE.md template into a newly created group folder
+ * if the folder matches a known template pattern and doesn't already have one.
+ *
+ * Currently supports:
+ *  - `github_*-{number}` folders → `_templates/github-pr/CLAUDE.md`
+ */
+export function copyGroupTemplate(folder: string): void {
+  const groupDir = resolveGroupFolderPath(folder);
+  const targetPath = path.join(groupDir, 'CLAUDE.md');
+
+  // Don't overwrite existing CLAUDE.md
+  if (fs.existsSync(targetPath)) return;
+
+  // Determine which template to use based on folder name pattern
+  const templateName = getTemplateName(folder);
+  if (!templateName) return;
+
+  const templatePath = path.join(TEMPLATES_DIR, templateName, 'CLAUDE.md');
+  if (!fs.existsSync(templatePath)) return;
+
+  fs.copyFileSync(templatePath, targetPath);
+}
+
+/** Map a group folder name to a template name, or null if no template applies. */
+export function getTemplateName(folder: string): string | null {
+  // github_owner-repo-123 → github-pr template
+  if (/^github_.+-\d+$/.test(folder)) return 'github-pr';
+  return null;
 }
 
 export function resolveGroupIpcPath(folder: string): string {
