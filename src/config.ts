@@ -45,10 +45,6 @@ export const CONTAINER_MAX_OUTPUT_SIZE = parseIntEnv(
 ); // 10MB default
 export const IPC_POLL_INTERVAL = 1000;
 export const IDLE_TIMEOUT = parseIntEnv('IDLE_TIMEOUT', 1800000); // 30min default — how long to keep container alive after last result
-export const HEARTBEAT_INTERVAL_MS = parseIntEnv(
-  'HEARTBEAT_INTERVAL_MS',
-  90000,
-); // 90s default — how often to send progress updates during long tasks
 export const MAX_CONCURRENT_CONTAINERS = Math.max(
   1,
   parseIntEnv('MAX_CONCURRENT_CONTAINERS', 5),

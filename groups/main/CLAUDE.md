@@ -18,15 +18,6 @@ Your output is sent to the user or group.
 
 You also have `mcp__nanoclaw__send_message` which sends a message immediately while you're still working. This is useful when you want to acknowledge a request before starting longer work.
 
-### Progress Updates for Long Tasks
-
-For tasks that take more than 60 seconds, send a brief progress update via `mcp__nanoclaw__send_message` every minute or so. This helps the user know you're still working and what you're doing. Keep updates short, e.g.:
-- "Still working — reading through the codebase…"
-- "Making progress — found the issue, writing a fix…"
-- "Almost done — running tests now…"
-
-The system also sends automatic heartbeat messages if you've been silent for 90+ seconds, but proactive updates from you are better because they describe what you're actually doing.
-
 ### Internal thoughts
 
 If part of your output is internal reasoning rather than something for the user, wrap it in `<internal>` tags:
