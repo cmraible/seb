@@ -11,6 +11,7 @@ import {
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
+  CREDENTIAL_PROXY_PORT,
   DATA_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
@@ -19,6 +20,8 @@ import {
 import { readEnvFile } from './env.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
+import { CONTAINER_HOST_GATEWAY } from './container-runtime.js';
+import { detectAuthMode } from './credential-proxy.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { getRuntime } from './runtime/index.js';
 import type { RuntimeInstance, VolumeMount } from './runtime/runtime.js';
@@ -36,7 +39,6 @@ export interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
-  secrets?: Record<string, string>;
 }
 
 export interface ContainerOutput {
@@ -65,6 +67,17 @@ function buildVolumeMounts(
       containerPath: '/workspace/project',
       readonly: true,
     });
+
+    // Shadow .env so the agent cannot read secrets from the mounted project root.
+    // Credentials are injected by the credential proxy, never exposed to containers.
+    const envFile = path.join(projectRoot, '.env');
+    if (fs.existsSync(envFile)) {
+      mounts.push({
+        hostPath: '/dev/null',
+        containerPath: '/workspace/project/.env',
+        readonly: true,
+      });
+    }
 
     // Main also gets its group folder as the working directory
     mounts.push({
@@ -213,26 +226,33 @@ function buildVolumeMounts(
 }
 
 /**
- * Read allowed secrets from .env for passing to the container via stdin.
- * Secrets are never written to disk or mounted as files.
- */
-function readSecrets(): Record<string, string> {
-  return readEnvFile([
-    'CLAUDE_CODE_OAUTH_TOKEN',
-    'ANTHROPIC_API_KEY',
-    'ANTHROPIC_BASE_URL',
-    'ANTHROPIC_AUTH_TOKEN',
-    'OP_SERVICE_ACCOUNT_TOKEN',
-    'OPENROUTER_API_KEY',
-    'GITHUB_TOKEN',
-  ]);
-}
-
-/**
  * Build the environment variables to pass into the runtime instance.
+ * Containers route API traffic through the credential proxy — they never
+ * see real secrets. Only placeholder tokens and proxy URL are injected.
  */
 function buildRuntimeEnv(): Record<string, string> {
   const env: Record<string, string> = { TZ: TIMEZONE };
+
+  // Route API traffic through the credential proxy (containers never see real secrets)
+  env.ANTHROPIC_BASE_URL = `http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`;
+
+  // Mirror the host's auth method with a placeholder value.
+  // API key mode: SDK sends x-api-key, proxy replaces with real key.
+  // OAuth mode:   SDK exchanges placeholder token for temp API key,
+  //               proxy injects real OAuth token on that exchange request.
+  const authMode = detectAuthMode();
+  if (authMode === 'api-key') {
+    env.ANTHROPIC_API_KEY = 'placeholder';
+  } else {
+    env.CLAUDE_CODE_OAUTH_TOKEN = 'placeholder';
+  }
+
+  // Pass non-Anthropic secrets that tools inside the container need.
+  // These don't go through the credential proxy — they're passed as env vars.
+  const toolSecrets = readEnvFile(['GITHUB_TOKEN']);
+  for (const [key, value] of Object.entries(toolSecrets)) {
+    if (value) env[key] = value;
+  }
 
   // Run as host user so bind-mounted files are accessible.
   // Skip when running as root (uid 0), as the container's node user (uid 1000),
@@ -306,12 +326,8 @@ export async function runContainerAgent(
     let stdoutTruncated = false;
     let stderrTruncated = false;
 
-    // Pass secrets via stdin (never written to disk or mounted as files)
-    input.secrets = readSecrets();
     instance.writeInput(JSON.stringify(input));
     instance.closeInput();
-    // Remove secrets from input so they don't appear in logs
-    delete input.secrets;
 
     // Streaming output: parse OUTPUT_START/END marker pairs as they arrive
     let parseBuffer = '';
