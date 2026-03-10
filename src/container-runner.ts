@@ -17,6 +17,7 @@ import {
   IDLE_TIMEOUT,
   TIMEZONE,
 } from './config.js';
+import { readEnvFile } from './env.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { CONTAINER_HOST_GATEWAY } from './container-runtime.js';
@@ -244,6 +245,13 @@ function buildRuntimeEnv(): Record<string, string> {
     env.ANTHROPIC_API_KEY = 'placeholder';
   } else {
     env.CLAUDE_CODE_OAUTH_TOKEN = 'placeholder';
+  }
+
+  // Pass non-Anthropic secrets that tools inside the container need.
+  // These don't go through the credential proxy — they're passed as env vars.
+  const toolSecrets = readEnvFile(['GITHUB_TOKEN']);
+  for (const [key, value] of Object.entries(toolSecrets)) {
+    if (value) env[key] = value;
   }
 
   // Run as host user so bind-mounted files are accessible.
