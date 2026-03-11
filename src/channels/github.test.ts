@@ -17,7 +17,7 @@ vi.mock('../logger.js', () => ({
   },
 }));
 
-import { GitHubChannel, makeGitHubFolder } from './github.js';
+import { GitHubChannel, makeGitHubFolder, extractAuthor } from './github.js';
 import { ChannelOpts } from './registry.js';
 
 // --- Test helpers ---
@@ -591,7 +591,7 @@ describe('GitHubChannel', () => {
   // --- Auto-registration ---
 
   describe('auto-registration', () => {
-    it('auto-registers group on first event for an issue', async () => {
+    it('auto-registers group with requiresTrigger true by default', async () => {
       await sendWebhook(port, {
         event: 'issues',
         secret: SECRET,
@@ -602,6 +602,7 @@ describe('GitHubChannel', () => {
             number: 42,
             title: 'Bug report',
             html_url: 'https://github.com/cmraible/seb/issues/42',
+            user: { login: 'alice' },
           },
           sender: { login: 'alice' },
         },
@@ -613,7 +614,7 @@ describe('GitHubChannel', () => {
           name: 'cmraible/seb#42',
           folder: 'github_cmraible-seb-42',
           trigger: '@Andy',
-          requiresTrigger: false,
+          requiresTrigger: true,
         }),
       );
     });
@@ -639,6 +640,7 @@ describe('GitHubChannel', () => {
             number: 42,
             title: 'Bug report',
             html_url: 'https://github.com/cmraible/seb/issues/42',
+            user: { login: 'alice' },
           },
           sender: { login: 'alice' },
         },
@@ -647,7 +649,7 @@ describe('GitHubChannel', () => {
       expect(opts.registerGroup).not.toHaveBeenCalled();
     });
 
-    it('auto-registers repo-level group for check_suite without PR', async () => {
+    it('auto-registers repo-level group with requiresTrigger true', async () => {
       await sendWebhook(port, {
         event: 'check_suite',
         secret: SECRET,
@@ -669,7 +671,7 @@ describe('GitHubChannel', () => {
         expect.objectContaining({
           name: 'cmraible/seb',
           folder: 'github_cmraible-seb',
-          requiresTrigger: false,
+          requiresTrigger: true,
         }),
       );
     });
@@ -768,6 +770,216 @@ describe('GitHubChannel', () => {
         expect.stringContaining('Invalid GitHub JID'),
       );
     });
+  });
+});
+
+// --- extractAuthor ---
+
+describe('extractAuthor', () => {
+  it('returns PR author for pull_request events', () => {
+    expect(
+      extractAuthor('pull_request', {
+        pull_request: { user: { login: 'seb-writes-code' } },
+      }),
+    ).toBe('seb-writes-code');
+  });
+
+  it('returns PR author for pull_request_review events', () => {
+    expect(
+      extractAuthor('pull_request_review', {
+        pull_request: { user: { login: 'alice' } },
+      }),
+    ).toBe('alice');
+  });
+
+  it('returns PR author for pull_request_review_comment events', () => {
+    expect(
+      extractAuthor('pull_request_review_comment', {
+        pull_request: { user: { login: 'bob' } },
+      }),
+    ).toBe('bob');
+  });
+
+  it('returns issue author for issues events', () => {
+    expect(
+      extractAuthor('issues', { issue: { user: { login: 'alice' } } }),
+    ).toBe('alice');
+  });
+
+  it('returns issue author for issue_comment events', () => {
+    expect(
+      extractAuthor('issue_comment', { issue: { user: { login: 'bob' } } }),
+    ).toBe('bob');
+  });
+
+  it('returns null for check_suite events', () => {
+    expect(extractAuthor('check_suite', { check_suite: {} })).toBeNull();
+  });
+
+  it('returns null for unknown events', () => {
+    expect(extractAuthor('push', {})).toBeNull();
+  });
+});
+
+// --- Bot-authored PR trigger bypass ---
+
+describe('GitHubChannel bot username bypass', () => {
+  const SECRET = 'test-webhook-secret';
+  let port: number;
+  let channel: GitHubChannel;
+  let opts: ChannelOpts;
+
+  afterEach(async () => {
+    await channel.disconnect();
+  });
+
+  it('registers bot-authored PR with requiresTrigger false', async () => {
+    opts = createTestOpts();
+    channel = new GitHubChannel(
+      SECRET,
+      0,
+      'test-token',
+      [],
+      opts,
+      'seb-writes-code',
+    );
+    await channel.connect();
+    port = (channel as any).server.address().port;
+
+    await sendWebhook(port, {
+      event: 'pull_request',
+      secret: SECRET,
+      payload: {
+        action: 'opened',
+        repository: { full_name: 'cmraible/seb' },
+        pull_request: {
+          number: 10,
+          title: 'Bot PR',
+          html_url: 'https://github.com/cmraible/seb/pull/10',
+          merged: false,
+          user: { login: 'seb-writes-code' },
+        },
+        sender: { login: 'seb-writes-code' },
+      },
+    });
+
+    expect(opts.registerGroup).toHaveBeenCalledWith(
+      'gh:cmraible/seb#10',
+      expect.objectContaining({
+        requiresTrigger: false,
+      }),
+    );
+  });
+
+  it('registers non-bot PR with requiresTrigger true', async () => {
+    opts = createTestOpts();
+    channel = new GitHubChannel(
+      SECRET,
+      0,
+      'test-token',
+      [],
+      opts,
+      'seb-writes-code',
+    );
+    await channel.connect();
+    port = (channel as any).server.address().port;
+
+    await sendWebhook(port, {
+      event: 'pull_request',
+      secret: SECRET,
+      payload: {
+        action: 'opened',
+        repository: { full_name: 'cmraible/seb' },
+        pull_request: {
+          number: 11,
+          title: 'Someone else PR',
+          html_url: 'https://github.com/cmraible/seb/pull/11',
+          merged: false,
+          user: { login: 'alice' },
+        },
+        sender: { login: 'alice' },
+      },
+    });
+
+    expect(opts.registerGroup).toHaveBeenCalledWith(
+      'gh:cmraible/seb#11',
+      expect.objectContaining({
+        requiresTrigger: true,
+      }),
+    );
+  });
+
+  it('bypasses trigger for bot-authored PR on issue_comment events', async () => {
+    opts = createTestOpts();
+    channel = new GitHubChannel(
+      SECRET,
+      0,
+      'test-token',
+      [],
+      opts,
+      'seb-writes-code',
+    );
+    await channel.connect();
+    port = (channel as any).server.address().port;
+
+    await sendWebhook(port, {
+      event: 'issue_comment',
+      secret: SECRET,
+      payload: {
+        action: 'created',
+        repository: { full_name: 'cmraible/seb' },
+        issue: {
+          number: 10,
+          title: 'Bot PR',
+          pull_request: { url: 'https://api.github.com/...' },
+          user: { login: 'seb-writes-code' },
+        },
+        comment: {
+          user: { login: 'chris' },
+          body: 'CI failed, can you fix it?',
+          html_url: 'https://github.com/cmraible/seb/pull/10#issuecomment-1',
+        },
+        sender: { login: 'chris' },
+      },
+    });
+
+    expect(opts.registerGroup).toHaveBeenCalledWith(
+      'gh:cmraible/seb#10',
+      expect.objectContaining({
+        requiresTrigger: false,
+      }),
+    );
+  });
+
+  it('requires trigger when botUsername is not set', async () => {
+    opts = createTestOpts();
+    channel = new GitHubChannel(SECRET, 0, 'test-token', [], opts);
+    await channel.connect();
+    port = (channel as any).server.address().port;
+
+    await sendWebhook(port, {
+      event: 'pull_request',
+      secret: SECRET,
+      payload: {
+        action: 'opened',
+        repository: { full_name: 'cmraible/seb' },
+        pull_request: {
+          number: 12,
+          title: 'Some PR',
+          html_url: 'https://github.com/cmraible/seb/pull/12',
+          merged: false,
+          user: { login: 'seb-writes-code' },
+        },
+        sender: { login: 'seb-writes-code' },
+      },
+    });
+
+    expect(opts.registerGroup).toHaveBeenCalledWith(
+      'gh:cmraible/seb#12',
+      expect.objectContaining({
+        requiresTrigger: true,
+      }),
+    );
   });
 });
 

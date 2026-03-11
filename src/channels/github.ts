@@ -119,6 +119,24 @@ function extractTitle(event: string, payload: any): string | undefined {
   }
 }
 
+/**
+ * Extract the author (opener) of the issue or PR from a webhook payload.
+ * Returns null when the author cannot be determined (e.g. check_suite).
+ */
+export function extractAuthor(event: string, payload: any): string | null {
+  switch (event) {
+    case 'pull_request':
+    case 'pull_request_review':
+    case 'pull_request_review_comment':
+      return payload.pull_request?.user?.login ?? null;
+    case 'issues':
+    case 'issue_comment':
+      return payload.issue?.user?.login ?? null;
+    default:
+      return null;
+  }
+}
+
 /** Format a GitHub webhook event into a human-readable message */
 function formatEvent(event: string, payload: any): string | null {
   const repo = payload.repository?.full_name || 'unknown';
@@ -203,6 +221,8 @@ export class GitHubChannel implements Channel {
   private token: string;
   /** If set, only process events from these GitHub usernames */
   private allowedSenders: Set<string> | null;
+  /** GitHub username of the bot — PRs opened by this user skip the trigger */
+  private botUsername: string;
 
   constructor(
     webhookSecret: string,
@@ -210,6 +230,7 @@ export class GitHubChannel implements Channel {
     token: string,
     allowedSenders: string[],
     opts: ChannelOpts,
+    botUsername: string = '',
   ) {
     this.webhookSecret = webhookSecret;
     this.port = port;
@@ -217,6 +238,7 @@ export class GitHubChannel implements Channel {
     this.allowedSenders =
       allowedSenders.length > 0 ? new Set(allowedSenders) : null;
     this.opts = opts;
+    this.botUsername = botUsername;
   }
 
   async connect(): Promise<void> {
@@ -294,12 +316,16 @@ export class GitHubChannel implements Channel {
           const title = extractTitle(event, payload);
           const metadata: Record<string, string> = { type: groupType };
           if (title) metadata.title = title;
+
+          // Skip trigger for PRs/issues opened by the bot itself
+          const author = extractAuthor(event, payload);
+          const isBotAuthor = !!this.botUsername && author === this.botUsername;
           this.opts.registerGroup(chatJid, {
             name: chatName,
             folder,
             trigger: `@${ASSISTANT_NAME}`,
             added_at: timestamp,
-            requiresTrigger: false,
+            requiresTrigger: !isBotAuthor,
             metadata,
           });
           logger.info({ chatJid, folder }, 'Auto-registered GitHub group');
@@ -418,6 +444,7 @@ registerChannel('github', (opts: ChannelOpts) => {
     'GITHUB_WEBHOOK_PORT',
     'GITHUB_TOKEN',
     'GITHUB_ALLOWED_SENDERS',
+    'GITHUB_BOT_USERNAME',
   ]);
   const secret =
     process.env.GITHUB_WEBHOOK_SECRET || envVars.GITHUB_WEBHOOK_SECRET || '';
@@ -444,9 +471,26 @@ registerChannel('github', (opts: ChannelOpts) => {
     );
   }
 
+  const botUsername =
+    process.env.GITHUB_BOT_USERNAME || envVars.GITHUB_BOT_USERNAME || '';
+
   if (allowedSenders.length > 0) {
     logger.info({ allowedSenders }, 'GitHub: sender allowlist active');
   }
 
-  return new GitHubChannel(secret, port, token, allowedSenders, opts);
+  if (botUsername) {
+    logger.info(
+      { botUsername },
+      'GitHub: bot username configured — own PRs will skip trigger',
+    );
+  }
+
+  return new GitHubChannel(
+    secret,
+    port,
+    token,
+    allowedSenders,
+    opts,
+    botUsername,
+  );
 });
