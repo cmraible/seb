@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock logger
-vi.mock('./logger.js', () => ({
+vi.mock('../logger.js', () => ({
   logger: {
     debug: vi.fn(),
     info: vi.fn(),
@@ -12,50 +12,51 @@ vi.mock('./logger.js', () => ({
 
 // Mock child_process — store the mock fn so tests can configure it
 const mockExecSync = vi.fn();
+const mockSpawn = vi.fn();
 vi.mock('child_process', () => ({
   execSync: (...args: unknown[]) => mockExecSync(...args),
+  spawn: (...args: unknown[]) => mockSpawn(...args),
 }));
 
-import {
-  CONTAINER_RUNTIME_BIN,
-  readonlyMountArgs,
-  stopContainer,
-  ensureContainerRuntimeRunning,
-  cleanupOrphans,
-} from './container-runtime.js';
-import { logger } from './logger.js';
+import { DockerRuntime } from './docker.js';
+import { logger } from '../logger.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
-// --- Pure functions ---
+// --- readonlyMountArgs ---
 
 describe('readonlyMountArgs', () => {
   it('returns -v flag with :ro suffix', () => {
-    const args = readonlyMountArgs('/host/path', '/container/path');
+    const runtime = new DockerRuntime();
+    const args = runtime.readonlyMountArgs('/host/path', '/container/path');
     expect(args).toEqual(['-v', '/host/path:/container/path:ro']);
   });
 });
 
-describe('stopContainer', () => {
-  it('returns stop command using CONTAINER_RUNTIME_BIN', () => {
-    expect(stopContainer('nanoclaw-test-123')).toBe(
-      `${CONTAINER_RUNTIME_BIN} stop nanoclaw-test-123`,
+// --- stopCommand ---
+
+describe('stopCommand', () => {
+  it('returns docker stop command with container name', () => {
+    const runtime = new DockerRuntime();
+    expect(runtime.stopCommand('nanoclaw-test-123')).toBe(
+      'docker stop nanoclaw-test-123',
     );
   });
 });
 
-// --- ensureContainerRuntimeRunning ---
+// --- ensureRunning ---
 
-describe('ensureContainerRuntimeRunning', () => {
+describe('ensureRunning', () => {
   it('does nothing when runtime is already running', () => {
+    const runtime = new DockerRuntime();
     mockExecSync.mockReturnValueOnce('');
 
-    ensureContainerRuntimeRunning();
+    runtime.ensureRunning();
 
     expect(mockExecSync).toHaveBeenCalledTimes(1);
-    expect(mockExecSync).toHaveBeenCalledWith(`${CONTAINER_RUNTIME_BIN} info`, {
+    expect(mockExecSync).toHaveBeenCalledWith('docker info', {
       stdio: 'pipe',
       timeout: 10000,
     });
@@ -65,11 +66,12 @@ describe('ensureContainerRuntimeRunning', () => {
   });
 
   it('throws when docker info fails', () => {
+    const runtime = new DockerRuntime();
     mockExecSync.mockImplementationOnce(() => {
       throw new Error('Cannot connect to the Docker daemon');
     });
 
-    expect(() => ensureContainerRuntimeRunning()).toThrow(
+    expect(() => runtime.ensureRunning()).toThrow(
       'Container runtime is required but failed to start',
     );
     expect(logger.error).toHaveBeenCalled();
@@ -80,6 +82,7 @@ describe('ensureContainerRuntimeRunning', () => {
 
 describe('cleanupOrphans', () => {
   it('stops orphaned nanoclaw containers', () => {
+    const runtime = new DockerRuntime();
     // docker ps returns container names, one per line
     mockExecSync.mockReturnValueOnce(
       'nanoclaw-group1-111\nnanoclaw-group2-222\n',
@@ -87,18 +90,18 @@ describe('cleanupOrphans', () => {
     // stop calls succeed
     mockExecSync.mockReturnValue('');
 
-    cleanupOrphans();
+    runtime.cleanupOrphans();
 
     // ps + 2 stop calls
     expect(mockExecSync).toHaveBeenCalledTimes(3);
     expect(mockExecSync).toHaveBeenNthCalledWith(
       2,
-      `${CONTAINER_RUNTIME_BIN} stop nanoclaw-group1-111`,
+      'docker stop nanoclaw-group1-111',
       { stdio: 'pipe' },
     );
     expect(mockExecSync).toHaveBeenNthCalledWith(
       3,
-      `${CONTAINER_RUNTIME_BIN} stop nanoclaw-group2-222`,
+      'docker stop nanoclaw-group2-222',
       { stdio: 'pipe' },
     );
     expect(logger.info).toHaveBeenCalledWith(
@@ -108,20 +111,22 @@ describe('cleanupOrphans', () => {
   });
 
   it('does nothing when no orphans exist', () => {
+    const runtime = new DockerRuntime();
     mockExecSync.mockReturnValueOnce('');
 
-    cleanupOrphans();
+    runtime.cleanupOrphans();
 
     expect(mockExecSync).toHaveBeenCalledTimes(1);
     expect(logger.info).not.toHaveBeenCalled();
   });
 
   it('warns and continues when ps fails', () => {
+    const runtime = new DockerRuntime();
     mockExecSync.mockImplementationOnce(() => {
       throw new Error('docker not available');
     });
 
-    cleanupOrphans(); // should not throw
+    runtime.cleanupOrphans(); // should not throw
 
     expect(logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ err: expect.any(Error) }),
@@ -130,6 +135,7 @@ describe('cleanupOrphans', () => {
   });
 
   it('continues stopping remaining containers when one stop fails', () => {
+    const runtime = new DockerRuntime();
     mockExecSync.mockReturnValueOnce('nanoclaw-a-1\nnanoclaw-b-2\n');
     // First stop fails
     mockExecSync.mockImplementationOnce(() => {
@@ -138,12 +144,21 @@ describe('cleanupOrphans', () => {
     // Second stop succeeds
     mockExecSync.mockReturnValueOnce('');
 
-    cleanupOrphans(); // should not throw
+    runtime.cleanupOrphans(); // should not throw
 
     expect(mockExecSync).toHaveBeenCalledTimes(3);
     expect(logger.info).toHaveBeenCalledWith(
       { count: 2, names: ['nanoclaw-a-1', 'nanoclaw-b-2'] },
       'Stopped orphaned containers',
     );
+  });
+});
+
+// --- type ---
+
+describe('DockerRuntime type', () => {
+  it('has type "docker"', () => {
+    const runtime = new DockerRuntime();
+    expect(runtime.type).toBe('docker');
   });
 });
