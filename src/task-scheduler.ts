@@ -194,6 +194,7 @@ async function runTask(
         isMain,
         isScheduledTask: true,
         assistantName: ASSISTANT_NAME,
+        allowedMcpServers: group.allowedMcpServers,
       },
       (instance, containerName) =>
         deps.onProcess(

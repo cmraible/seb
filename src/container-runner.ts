@@ -40,6 +40,7 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   ackContext?: Record<string, string>;
+  allowedMcpServers?: string[];
 }
 
 export interface ContainerOutput {
