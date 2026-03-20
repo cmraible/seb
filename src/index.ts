@@ -70,6 +70,11 @@ let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
 
+// In-memory cache of message metadata (e.g. telegram_message_id) keyed by message ID.
+// Metadata isn't persisted to SQLite, so we keep it here for the ack flow.
+const messageMetadataCache = new Map<string, Record<string, string>>();
+const MAX_METADATA_CACHE_SIZE = 500;
+
 /**
  * Check whether any message in the batch contains a trigger word
  * from an allowed sender (or from ourselves).
@@ -225,10 +230,15 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }, IDLE_TIMEOUT);
   };
 
-  // Extract ack context from the last message with metadata (the triggering message)
-  // so the agent container can ack it on startup
-  const ackMessage = [...missedMessages].reverse().find((m) => m.metadata);
-  const ackContext = ackMessage?.metadata;
+  // Extract ack context from the last message with cached metadata (the triggering message)
+  // so the agent container can ack it on startup.
+  // Metadata is stored in-memory (not in SQLite), so look it up from the cache.
+  const ackMessage = [...missedMessages]
+    .reverse()
+    .find((m) => messageMetadataCache.has(m.id));
+  const ackContext = ackMessage
+    ? messageMetadataCache.get(ackMessage.id)
+    : undefined;
 
   let hadError = false;
   let outputSentToUser = false;
@@ -581,6 +591,15 @@ async function main(): Promise<void> {
             );
           }
           return;
+        }
+      }
+      // Cache metadata (e.g. telegram_message_id) before storing — SQLite doesn't persist it
+      if (msg.metadata && Object.keys(msg.metadata).length > 0) {
+        messageMetadataCache.set(msg.id, msg.metadata);
+        // Evict oldest entries if cache grows too large
+        if (messageMetadataCache.size > MAX_METADATA_CACHE_SIZE) {
+          const firstKey = messageMetadataCache.keys().next().value;
+          if (firstKey) messageMetadataCache.delete(firstKey);
         }
       }
       storeMessage(msg);
