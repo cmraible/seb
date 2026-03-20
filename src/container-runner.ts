@@ -202,6 +202,16 @@ function buildVolumeMounts(
     });
   }
 
+  // SSH keys (read-only — dedicated agent key for git push and remote access)
+  const agentSshDir = path.join(DATA_DIR, 'ssh');
+  if (fs.existsSync(agentSshDir)) {
+    mounts.push({
+      hostPath: agentSshDir,
+      containerPath: '/home/node/.ssh',
+      readonly: true,
+    });
+  }
+
   // Obsidian vault (shared knowledge base across all groups)
   const obsidianDir = path.join(homeDir, 'obsidian-vault');
   if (fs.existsSync(obsidianDir)) {
