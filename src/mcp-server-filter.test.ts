@@ -121,7 +121,10 @@ function buildMcpServers(
 const ALL_SERVERS: Record<string, McpServerConfig> = {
   nanoclaw: { command: 'node', args: ['mcp.js'] },
   '1password': { command: 'npx', args: ['-y', '@takescake/1password-mcp'] },
-  gmail: { command: 'npx', args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'] },
+  gmail: {
+    command: 'npx',
+    args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'],
+  },
   github: { command: 'npx', args: ['-y', 'github-mcp'] },
 };
 
@@ -137,12 +140,22 @@ describe('MCP server filtering', () => {
 
   it('group without allowedMcpServers receives all servers', () => {
     const result = buildMcpServers(ALL_SERVERS, undefined);
-    expect(Object.keys(result)).toEqual(['nanoclaw', '1password', 'gmail', 'github']);
+    expect(Object.keys(result)).toEqual([
+      'nanoclaw',
+      '1password',
+      'gmail',
+      'github',
+    ]);
   });
 
   it('group with empty allowedMcpServers receives all servers', () => {
     const result = buildMcpServers(ALL_SERVERS, []);
-    expect(Object.keys(result)).toEqual(['nanoclaw', '1password', 'gmail', 'github']);
+    expect(Object.keys(result)).toEqual([
+      'nanoclaw',
+      '1password',
+      'gmail',
+      'github',
+    ]);
   });
 
   it('filters to multiple allowed servers', () => {
