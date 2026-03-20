@@ -130,7 +130,7 @@ export class DockerRuntime implements Runtime {
   }
 
   stopCommand(name: string): string {
-    return `${DOCKER_BIN} stop ${name}`;
+    return `${DOCKER_BIN} stop -t 1 ${name}`;
   }
 
   /** Returns CLI args for a readonly bind mount. */
