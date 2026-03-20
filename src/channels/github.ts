@@ -137,15 +137,22 @@ export function extractAuthor(event: string, payload: any): string | null {
   }
 }
 
+interface FormattedEvent {
+  text: string;
+  metadata?: Record<string, string>;
+}
+
 /** Format a GitHub webhook event into a human-readable message */
-function formatEvent(event: string, payload: any): string | null {
+function formatEvent(event: string, payload: any): FormattedEvent | null {
   const repo = payload.repository?.full_name || 'unknown';
 
   switch (event) {
     case 'issues': {
       const { action, issue } = payload;
       if (action === 'opened' || action === 'closed' || action === 'reopened') {
-        return `[GitHub] Issue ${action}: #${issue.number} "${issue.title}" in ${repo}\n${issue.html_url}`;
+        return {
+          text: `[GitHub] Issue ${action}: #${issue.number} "${issue.title}" in ${repo}\n${issue.html_url}`,
+        };
       }
       return null;
     }
@@ -159,7 +166,9 @@ function formatEvent(event: string, payload: any): string | null {
         action === 'ready_for_review'
       ) {
         const merged = action === 'closed' && pr.merged ? 'merged' : action;
-        return `[GitHub] PR ${merged}: #${pr.number} "${pr.title}" in ${repo}\n${pr.html_url}`;
+        return {
+          text: `[GitHub] PR ${merged}: #${pr.number} "${pr.title}" in ${repo}\n${pr.html_url}`,
+        };
       }
       return null;
     }
@@ -172,7 +181,14 @@ function formatEvent(event: string, payload: any): string | null {
           comment.body.length > 200
             ? comment.body.slice(0, 200) + '...'
             : comment.body;
-        return `[GitHub] New comment on ${type} #${issue.number} "${issue.title}" by ${comment.user.login}:\n${body}\n${comment.html_url}`;
+        return {
+          text: `[GitHub] New comment on ${type} #${issue.number} "${issue.title}" by ${comment.user.login}:\n${body}\n${comment.html_url}`,
+          metadata: {
+            github_repo: repo,
+            github_comment_id: String(comment.id),
+            github_endpoint: 'issues',
+          },
+        };
       }
       return null;
     }
@@ -180,7 +196,9 @@ function formatEvent(event: string, payload: any): string | null {
     case 'pull_request_review': {
       const { action, review, pull_request: pr } = payload;
       if (action === 'submitted' && review.state !== 'commented') {
-        return `[GitHub] PR #${pr.number} "${pr.title}" review: ${review.state} by ${review.user.login}\n${review.html_url}`;
+        return {
+          text: `[GitHub] PR #${pr.number} "${pr.title}" review: ${review.state} by ${review.user.login}\n${review.html_url}`,
+        };
       }
       return null;
     }
@@ -192,7 +210,14 @@ function formatEvent(event: string, payload: any): string | null {
           comment.body.length > 200
             ? comment.body.slice(0, 200) + '...'
             : comment.body;
-        return `[GitHub] Review comment on PR #${pr.number} "${pr.title}" by ${comment.user.login}:\n${body}\n${comment.html_url}`;
+        return {
+          text: `[GitHub] Review comment on PR #${pr.number} "${pr.title}" by ${comment.user.login}:\n${body}\n${comment.html_url}`,
+          metadata: {
+            github_repo: repo,
+            github_comment_id: String(comment.id),
+            github_endpoint: 'pulls',
+          },
+        };
       }
       return null;
     }
@@ -201,7 +226,9 @@ function formatEvent(event: string, payload: any): string | null {
       const { action, check_suite: suite } = payload;
       if (action === 'completed' && suite.conclusion !== 'success') {
         const branch = suite.head_branch || 'unknown';
-        return `[GitHub] Check suite ${suite.conclusion} on ${branch} in ${repo}\n${suite.url}`;
+        return {
+          text: `[GitHub] Check suite ${suite.conclusion} on ${branch} in ${repo}\n${suite.url}`,
+        };
       }
       return null;
     }
@@ -333,8 +360,8 @@ export class GitHubChannel implements Channel {
       }
 
       // Format the event into a human-readable message
-      const text = formatEvent(event, payload);
-      if (!text) return;
+      const formatted = formatEvent(event, payload);
+      if (!formatted) return;
 
       // Deliver message
       this.opts.onMessage(chatJid, {
@@ -342,9 +369,10 @@ export class GitHubChannel implements Channel {
         chat_jid: chatJid,
         sender: senderName,
         sender_name: senderName,
-        content: text,
+        content: formatted.text,
         timestamp,
         is_from_me: false,
+        metadata: formatted.metadata,
       });
 
       logger.info(
@@ -416,6 +444,49 @@ export class GitHubChannel implements Channel {
       );
     } catch (err) {
       logger.error({ jid, issueNumber, err }, 'Failed to post GitHub comment');
+    }
+  }
+
+  async ack(jid: string, context?: Record<string, string>): Promise<void> {
+    if (!this.token || !context) return;
+    const repo = context.github_repo;
+    const commentId = context.github_comment_id;
+    const endpoint = context.github_endpoint as 'issues' | 'pulls' | undefined;
+    if (!repo || !commentId || !endpoint) return;
+    await this.addReaction(repo, parseInt(commentId, 10), 'eyes', endpoint);
+  }
+
+  private async addReaction(
+    repo: string,
+    commentId: number,
+    reaction: string,
+    endpoint: 'issues' | 'pulls',
+  ): Promise<void> {
+    const apiPath =
+      endpoint === 'pulls'
+        ? `repos/${repo}/pulls/comments/${commentId}/reactions`
+        : `repos/${repo}/issues/comments/${commentId}/reactions`;
+    const url = `https://api.github.com/${apiPath}`;
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ content: reaction }),
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        logger.warn(
+          { repo, commentId, reaction, status: res.status, body },
+          'GitHub API error adding reaction',
+        );
+      }
+    } catch (err) {
+      logger.warn({ repo, commentId, reaction, err }, 'Failed to add GitHub reaction');
     }
   }
 

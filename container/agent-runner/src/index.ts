@@ -27,6 +27,7 @@ interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
+  ackContext?: Record<string, string>;
 }
 
 interface ContainerOutput {
@@ -486,6 +487,23 @@ async function main(): Promise<void> {
       error: `Failed to parse input: ${err instanceof Error ? err.message : String(err)}`
     });
     process.exit(1);
+  }
+
+  // Send ack to host so the channel can react with 👀 (confirms agent is alive)
+  if (containerInput.ackContext && Object.keys(containerInput.ackContext).length > 0) {
+    const ackDir = '/workspace/ipc/messages';
+    fs.mkdirSync(ackDir, { recursive: true });
+    const ackFile = path.join(ackDir, `${Date.now()}-ack.json`);
+    const ackData = {
+      type: 'ack',
+      chatJid: containerInput.chatJid,
+      context: containerInput.ackContext,
+      timestamp: new Date().toISOString(),
+    };
+    const tmpFile = `${ackFile}.tmp`;
+    fs.writeFileSync(tmpFile, JSON.stringify(ackData));
+    fs.renameSync(tmpFile, ackFile);
+    log('Sent ack to host');
   }
 
   // Credentials are injected by the host's credential proxy via ANTHROPIC_BASE_URL.

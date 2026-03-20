@@ -53,6 +53,7 @@ export interface NewMessage {
   timestamp: string;
   is_from_me?: boolean;
   is_bot_message?: boolean;
+  metadata?: Record<string, string>;
 }
 
 export interface ScheduledTask {
@@ -92,6 +93,8 @@ export interface Channel {
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
   // Optional: sync group/chat names from the platform.
   syncGroups?(force: boolean): Promise<void>;
+  // Optional: acknowledge a message (e.g. 👀 reaction). Fired by agent container on startup via IPC.
+  ack?(jid: string, context?: Record<string, string>): Promise<void>;
 }
 
 // Callback type that channels use to deliver inbound messages

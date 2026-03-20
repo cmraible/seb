@@ -231,14 +231,8 @@ export class TelegramChannel implements Channel {
         return;
       }
 
-      // React with eyes emoji so the user knows the message was seen
-      ctx
-        .react('👀')
-        .catch((err) =>
-          logger.debug({ chatJid, err }, 'Failed to react with eyes emoji'),
-        );
-
       // Deliver message — startMessageLoop() will pick it up
+      // Include telegram metadata so the agent-side ack can react with 👀
       this.opts.onMessage(chatJid, {
         id: msgId,
         chat_jid: chatJid,
@@ -247,6 +241,10 @@ export class TelegramChannel implements Channel {
         content,
         timestamp,
         is_from_me: false,
+        metadata: {
+          telegram_chat_id: String(ctx.chat.id),
+          telegram_message_id: msgId,
+        },
       });
 
       logger.info(
@@ -387,6 +385,20 @@ export class TelegramChannel implements Channel {
       );
     } catch (err) {
       logger.debug({ jid, err }, 'Failed to send Telegram typing indicator');
+    }
+  }
+
+  async ack(jid: string, context?: Record<string, string>): Promise<void> {
+    if (!this.bot || !context) return;
+    const chatId = context.telegram_chat_id;
+    const messageId = context.telegram_message_id;
+    if (!chatId || !messageId) return;
+    try {
+      await this.bot.api.setMessageReaction(chatId, parseInt(messageId, 10), [
+        { type: 'emoji', emoji: '👀' },
+      ]);
+    } catch (err) {
+      logger.debug({ jid, err }, 'Failed to add Telegram eyes reaction');
     }
   }
 }
