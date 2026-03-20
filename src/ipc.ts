@@ -12,6 +12,7 @@ import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
+  ack: (chatJid: string, context?: Record<string, string>) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -92,6 +93,13 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     'Unauthorized IPC message attempt blocked',
                   );
                 }
+              } else if (data.type === 'ack' && data.chatJid) {
+                // Agent container confirming it's alive — dispatch channel ack
+                await deps.ack(data.chatJid, data.context);
+                logger.info(
+                  { chatJid: data.chatJid, sourceGroup },
+                  'IPC ack dispatched',
+                );
               } else {
                 logger.warn(
                   { sourceGroup, file, type: data.type },

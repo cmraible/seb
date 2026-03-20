@@ -1098,3 +1098,158 @@ describe('GitHubChannel sender allowlist', () => {
     expect(opts.onMessage).toHaveBeenCalled();
   });
 });
+
+// --- ack and metadata tests ---
+
+describe('GitHubChannel ack', () => {
+  const SECRET = 'test-webhook-secret';
+  let port: number;
+  let channel: GitHubChannel;
+  let opts: ChannelOpts;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    opts = createTestOpts();
+    channel = new GitHubChannel(SECRET, 0, 'test-github-token', [], opts);
+    await channel.connect();
+    port = (channel as any).server.address().port;
+  });
+
+  afterEach(async () => {
+    await channel.disconnect();
+  });
+
+  it('issue_comment webhook includes metadata with comment ID', async () => {
+    await sendWebhook(port, {
+      event: 'issue_comment',
+      secret: SECRET,
+      payload: {
+        action: 'created',
+        repository: { full_name: 'cmraible/seb' },
+        issue: {
+          number: 42,
+          title: 'Test issue',
+          html_url: 'https://github.com/cmraible/seb/issues/42',
+        },
+        comment: {
+          id: 12345,
+          body: 'Hello @Andy',
+          user: { login: 'chris' },
+          html_url:
+            'https://github.com/cmraible/seb/issues/42#issuecomment-12345',
+        },
+        sender: { login: 'chris' },
+      },
+    });
+
+    expect(opts.onMessage).toHaveBeenCalledWith(
+      'gh:cmraible/seb#42',
+      expect.objectContaining({
+        metadata: {
+          github_repo: 'cmraible/seb',
+          github_comment_id: '12345',
+          github_endpoint: 'issues',
+        },
+      }),
+    );
+  });
+
+  it('pull_request_review_comment includes metadata with pulls endpoint', async () => {
+    await sendWebhook(port, {
+      event: 'pull_request_review_comment',
+      secret: SECRET,
+      payload: {
+        action: 'created',
+        repository: { full_name: 'cmraible/seb' },
+        pull_request: {
+          number: 99,
+          title: 'Test PR',
+          user: { login: 'chris' },
+        },
+        comment: {
+          id: 67890,
+          body: 'Review comment',
+          user: { login: 'chris' },
+          html_url: 'https://github.com/cmraible/seb/pull/99#discussion_r67890',
+        },
+        sender: { login: 'chris' },
+      },
+    });
+
+    expect(opts.onMessage).toHaveBeenCalledWith(
+      'gh:cmraible/seb#99',
+      expect.objectContaining({
+        metadata: {
+          github_repo: 'cmraible/seb',
+          github_comment_id: '67890',
+          github_endpoint: 'pulls',
+        },
+      }),
+    );
+  });
+
+  it('ack() calls GitHub Reactions API with eyes emoji', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('{}', { status: 201 }));
+
+    await channel.ack('gh:cmraible/seb#42', {
+      github_repo: 'cmraible/seb',
+      github_comment_id: '12345',
+      github_endpoint: 'issues',
+    });
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'https://api.github.com/repos/cmraible/seb/issues/comments/12345/reactions',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ content: 'eyes' }),
+      }),
+    );
+    fetchSpy.mockRestore();
+  });
+
+  it('ack() uses pulls endpoint for PR review comments', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('{}', { status: 201 }));
+
+    await channel.ack('gh:cmraible/seb#99', {
+      github_repo: 'cmraible/seb',
+      github_comment_id: '67890',
+      github_endpoint: 'pulls',
+    });
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'https://api.github.com/repos/cmraible/seb/pulls/comments/67890/reactions',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ content: 'eyes' }),
+      }),
+    );
+    fetchSpy.mockRestore();
+  });
+
+  it('ack() does nothing without context', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    await channel.ack('gh:cmraible/seb#42');
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it('ack() does nothing without token', async () => {
+    const noTokenChannel = new GitHubChannel(SECRET, 0, '', [], opts);
+    await noTokenChannel.connect();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+    await noTokenChannel.ack('gh:cmraible/seb#42', {
+      github_repo: 'cmraible/seb',
+      github_comment_id: '12345',
+      github_endpoint: 'issues',
+    });
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+    await noTokenChannel.disconnect();
+  });
+});
