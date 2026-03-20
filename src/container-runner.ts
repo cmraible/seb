@@ -202,11 +202,11 @@ function buildVolumeMounts(
     });
   }
 
-  // SSH keys (read-only — for git push over SSH and remote access)
-  const sshDir = path.join(homeDir, '.ssh');
-  if (fs.existsSync(sshDir)) {
+  // SSH keys (read-only — dedicated agent key for git push and remote access)
+  const agentSshDir = path.join(DATA_DIR, 'ssh');
+  if (fs.existsSync(agentSshDir)) {
     mounts.push({
-      hostPath: sshDir,
+      hostPath: agentSshDir,
       containerPath: '/home/node/.ssh',
       readonly: true,
     });
