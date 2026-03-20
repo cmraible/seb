@@ -681,6 +681,31 @@ async function main(): Promise<void> {
   });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
+
+  // Notify main group that NanoClaw has started
+  try {
+    const mainJid = Object.entries(registeredGroups).find(
+      ([, g]) => g.isMain,
+    )?.[0];
+    if (mainJid) {
+      const channel = findChannel(channels, mainJid);
+      if (channel) {
+        let commitHash = '';
+        try {
+          commitHash = execSync('git rev-parse --short HEAD', {
+            encoding: 'utf-8',
+          }).trim();
+        } catch {
+          // not in a git repo
+        }
+        const version = commitHash || 'unknown';
+        await channel.sendMessage(mainJid, `NanoClaw started (${version})`);
+      }
+    }
+  } catch (err) {
+    logger.warn({ err }, 'Failed to send startup notification');
+  }
+
   startMessageLoop();
 }
 
