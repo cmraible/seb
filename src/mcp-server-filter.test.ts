@@ -41,6 +41,7 @@ beforeEach(() => {
 
   deps = {
     sendMessage: async () => {},
+    ack: async () => {},
     registeredGroups: () => groups,
     registerGroup: (jid, group) => {
       groups[jid] = group;
@@ -49,6 +50,7 @@ beforeEach(() => {
     syncGroups: async () => {},
     getAvailableGroups: () => [],
     writeGroupsSnapshot: () => {},
+    onTasksChanged: () => {},
   };
 });
 
