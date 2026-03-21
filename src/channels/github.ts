@@ -173,11 +173,17 @@ function formatEvent(event: string, payload: any): FormattedEvent | null {
         action === 'opened' ||
         action === 'closed' ||
         action === 'reopened' ||
-        action === 'ready_for_review'
+        action === 'ready_for_review' ||
+        action === 'synchronize'
       ) {
-        const merged = action === 'closed' && pr.merged ? 'merged' : action;
+        const label =
+          action === 'closed' && pr.merged
+            ? 'merged'
+            : action === 'synchronize'
+              ? 'updated'
+              : action;
         return {
-          text: `[GitHub] PR ${merged}: #${pr.number} "${pr.title}" in ${repo}\n${pr.html_url}`,
+          text: `[GitHub] PR ${label}: #${pr.number} "${pr.title}" in ${repo}\n${pr.html_url}`,
         };
       }
       return null;
