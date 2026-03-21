@@ -594,6 +594,7 @@ async function main(): Promise<void> {
       if (
         trimmed === '/rc' ||
         trimmed === '/rc-end' ||
+        trimmed === '/rcend' ||
         trimmed === '/remote-control' ||
         trimmed === '/remote-control-end'
       ) {
