@@ -277,6 +277,147 @@ Read `/workspace/project/data/registered_groups.json` and format it nicely.
 
 ---
 
+## Saved Search Watcher
+
+Seb can monitor websites for new listings and alert Chris when new items appear. This works with any marketplace, classifieds site, or search results page (GovDeals, Craigslist, eBay, Facebook Marketplace, etc.).
+
+### Recognizing Intent
+
+When Chris says things like:
+- "Watch govdeals.com for servers"
+- "Monitor Craigslist for RAV4 Hybrid listings"
+- "Alert me to new listings at [URL]"
+- "Keep an eye on [URL] for deals"
+- "Stop watching [search name]"
+- "What searches are you watching?"
+
+Treat these as saved search management requests.
+
+### Registering a New Search
+
+1. Help Chris find/construct the right search URL if needed (use `agent-browser` to navigate the site)
+2. Generate a short kebab-case ID (e.g., `govdeals-servers`, `craigslist-rav4-hybrid`)
+3. Add the entry to `/workspace/group/saved-searches.json`
+4. Schedule a recurring watcher task using `mcp__nanoclaw__schedule_task`
+5. Save the returned `taskId` back into the search entry
+6. Confirm to Chris with a summary of what you're watching and how often
+
+#### saved-searches.json Schema
+
+```json
+[
+  {
+    "id": "govdeals-servers",
+    "name": "GovDeals: Servers & Networking",
+    "url": "https://www.govdeals.com/index.cfm?fa=Main.AdvSearchResultsNew&searchPg=Category&additession=&category=00&description=server&sortOption=ad",
+    "description": "Watch for good deals on servers and networking gear",
+    "checkInterval": "0 */6 * * *",
+    "maxResults": 5,
+    "createdAt": "2026-03-13T00:00:00Z",
+    "lastChecked": null,
+    "taskId": null
+  }
+]
+```
+
+Fields:
+- **id**: Unique kebab-case identifier
+- **name**: Human-readable name for notifications
+- **url**: The search results URL to check
+- **description**: What Chris is looking for (guides the browser agent on what to extract)
+- **checkInterval**: Cron expression for how often to check (default: every 6 hours = `0 */6 * * *`)
+- **maxResults**: Max new listings to include in a notification (default: 5)
+- **createdAt**: ISO timestamp
+- **lastChecked**: ISO timestamp of last check (updated by watcher)
+- **taskId**: The scheduled task ID (for cancellation)
+
+#### Scheduling the Watcher Task
+
+Use `mcp__nanoclaw__schedule_task` with:
+- `schedule_type`: `"cron"`
+- `schedule_value`: the entry's `checkInterval`
+- `context_mode`: `"isolated"`
+- `prompt`: Load the template from `/workspace/group/search-watcher-template.md`, replacing `{{SEARCH_ID}}` with the search ID
+
+Example prompt for the scheduled task:
+
+```
+You are Seb, a personal assistant. You are running a scheduled task to check for new listings.
+
+Read /workspace/group/saved-searches.json and find the entry with id "{{SEARCH_ID}}".
+Read /workspace/group/saved-searches-state.json for previously seen listing IDs.
+
+Use agent-browser to visit the search URL and extract current listings. For each listing, extract:
+- A unique identifier (URL, ID, or title hash)
+- Title
+- Price (if available)
+- Link
+- Brief description
+
+Compare against seenIds in the state file. If there are new listings:
+1. Send a message using mcp__nanoclaw__send_message with:
+   - The search name
+   - Number of new listings
+   - Details for top 3-5 new items (title, price, link)
+2. Update saved-searches-state.json with the new IDs added to seenIds
+3. Update saved-searches.json lastChecked timestamp
+
+If no new listings, just update lastChecked silently (no message).
+
+If the page fails to load or has errors, send a brief error notification so Chris knows.
+```
+
+### State Tracking
+
+`/workspace/group/saved-searches-state.json` tracks which listings have already been seen:
+
+```json
+{
+  "govdeals-servers": {
+    "seenIds": ["listing-123", "listing-456"],
+    "lastChecked": "2026-03-13T18:00:00Z"
+  }
+}
+```
+
+- Only NEW listings (not in `seenIds`) trigger a notification
+- `seenIds` is append-only; cap at 500 entries per search (trim oldest if exceeded)
+- On first run, all current listings are added to `seenIds` without notifying (baseline scan)
+
+### Listing Active Searches
+
+When Chris asks "what are you watching?" or similar:
+- Read `/workspace/group/saved-searches.json`
+- Format as a concise list: name, URL, check frequency, last checked time
+
+### Stopping a Search
+
+When Chris says "stop watching X":
+1. Find the matching entry in `/workspace/group/saved-searches.json`
+2. Cancel the scheduled task using `mcp__nanoclaw__cancel_task` with the stored `taskId`
+3. Remove the entry from `saved-searches.json`
+4. Optionally remove its state from `saved-searches-state.json`
+5. Confirm to Chris
+
+### Notification Format
+
+Keep notifications concise and scannable:
+
+```
+🔍 *GovDeals: Servers & Networking* — 3 new listings
+
+• Dell PowerEdge R740 — $450
+  govdeals.com/listing/12345
+
+• HP ProLiant DL380 — $320
+  govdeals.com/listing/12346
+
+• Cisco Catalyst 9300 Switch — $180
+  govdeals.com/listing/12347
+```
+
+---
+
 ## Global Memory
 
 You can read and write to `/workspace/project/groups/global/CLAUDE.md` for facts that should apply to all groups. Only update global memory when explicitly asked to "remember this globally" or similar.

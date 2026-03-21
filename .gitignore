@@ -17,6 +17,7 @@ groups/*
 groups/main/*
 groups/global/*
 !groups/main/CLAUDE.md
+!groups/main/search-watcher-template.md
 !groups/global/CLAUDE.md
 
 # Secrets
