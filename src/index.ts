@@ -463,9 +463,11 @@ async function startMessageLoop(): Promise<void> {
               .find((m) => messageMetadataCache.has(m.id));
             if (lastMsg && channel.ack) {
               const meta = messageMetadataCache.get(lastMsg.id);
-              channel.ack(chatJid, meta).catch((err) =>
-                logger.warn({ chatJid, err }, 'Failed to ack piped message'),
-              );
+              channel
+                .ack(chatJid, meta)
+                .catch((err) =>
+                  logger.warn({ chatJid, err }, 'Failed to ack piped message'),
+                );
             }
             lastAgentTimestamp[chatJid] =
               messagesToSend[messagesToSend.length - 1].timestamp;
