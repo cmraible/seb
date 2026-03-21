@@ -84,6 +84,10 @@ export const TIMEZONE =
   process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 // Telegram configuration
+// Web App configuration
+export const WEBAPP_PORT = parseIntEnv('WEBAPP_PORT', 3002);
+export const WEBAPP_URL = process.env.WEBAPP_URL || '';
+
 export const TELEGRAM_BOT_TOKEN =
   process.env.TELEGRAM_BOT_TOKEN || envConfig.TELEGRAM_BOT_TOKEN || '';
 export const TELEGRAM_ONLY =

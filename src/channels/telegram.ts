@@ -1,6 +1,6 @@
 import { Api, Bot, InlineKeyboard } from 'grammy';
 
-import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
+import { ASSISTANT_NAME, TRIGGER_PATTERN, WEBAPP_URL } from '../config.js';
 import { readEnvFile } from '../env.js';
 import { formatNextRun, formatSchedule } from '../format-schedule.js';
 import { logger } from '../logger.js';
@@ -340,6 +340,22 @@ export class TelegramChannel implements Channel {
     this.bot.catch((err) => {
       logger.error({ err: err.message }, 'Telegram bot error');
     });
+
+    // Set menu button to open the Web App if WEBAPP_URL is configured
+    if (WEBAPP_URL) {
+      try {
+        await this.bot.api.setChatMenuButton({
+          menu_button: {
+            type: 'web_app',
+            text: 'Manage',
+            web_app: { url: `${WEBAPP_URL}/app` },
+          },
+        });
+        logger.info({ url: WEBAPP_URL }, 'Telegram menu button set to Web App');
+      } catch (err) {
+        logger.warn({ err }, 'Failed to set Telegram menu button');
+      }
+    }
 
     // Start polling — returns a Promise that resolves when started
     return new Promise<void>((resolve) => {
