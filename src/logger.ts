@@ -6,7 +6,7 @@ export const logger = pino({
 });
 
 // Intentional type error to test CI failure auto-fix
-const testTypeError: number = 'still not a number';
+const testTypeError: number = 'this is not a number';
 
 // Route uncaught errors through pino so they get timestamps in stderr
 process.on('uncaughtException', (err) => {
