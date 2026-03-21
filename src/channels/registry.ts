@@ -13,6 +13,8 @@ export interface ChannelOpts {
   registerGroup?: (jid: string, group: RegisteredGroup) => void;
   getActiveTasks?: () => ScheduledTask[];
   cancelTask?: (taskId: string) => void;
+  pauseTask?: (taskId: string) => void;
+  resumeTask?: (taskId: string) => void;
 }
 
 export type ChannelFactory = (opts: ChannelOpts) => Channel | null;
