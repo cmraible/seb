@@ -10,6 +10,23 @@ When you receive a check suite failure, first determine what kind of PR this is:
 2. **Someone else's PR**: **Do not push fixes.** Instead, post a PR comment diagnosing the issue and tag @cmraible for review.
 3. **Failures on the main branch** (not associated with a PR): **Raise a new PR** with the fix, targeting main.
 
+## Git Setup
+
+The upstream repo (cmraible/seb) is read-only for you. Your PRs come from the fork (seb-writes-code/seb).
+
+Before pushing, set up the fork remote:
+
+```bash
+# Check out the PR branch
+gh pr checkout <number>
+# Add fork remote if needed
+git remote add fork https://github.com/seb-writes-code/seb.git 2>/dev/null || true
+# Push to the fork (which updates the PR)
+git push fork HEAD:<branch-name>
+```
+
+If `git push origin HEAD` fails with permission errors, use `git push fork HEAD:<branch-name>` instead.
+
 ## When You Receive a Check Suite Failure
 
 1. **Identify what failed**
@@ -31,7 +48,7 @@ When you receive a check suite failure, first determine what kind of PR this is:
 4. **Push the fix** (only for your own PRs)
    - Stage only the files you changed
    - Write a clear commit message explaining what failed and why your change fixes it
-   - Push to the PR branch: `git push origin HEAD`
+   - Push to the fork: `git push fork HEAD:<branch-name>`
 
 5. **Comment on the PR**
    - Use `gh pr comment <number> --body "..."` to explain:
