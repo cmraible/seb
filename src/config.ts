@@ -70,6 +70,12 @@ export const TRIGGER_PATTERN = new RegExp(
   'i',
 );
 
+// Goodbye message sent when a container idles out after having sent output.
+// Set to empty string to disable.
+export const GOODBYE_MESSAGE =
+  process.env.GOODBYE_MESSAGE ??
+  '\u{1f44b} Going to sleep \u2014 mention me to wake me up!';
+
 // Timezone for scheduled tasks (cron expressions, etc.)
 // Uses system timezone by default
 export const TIMEZONE =

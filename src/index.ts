@@ -5,6 +5,7 @@ import path from 'path';
 import {
   ASSISTANT_NAME,
   CREDENTIAL_PROXY_PORT,
+  GOODBYE_MESSAGE,
   IDLE_TIMEOUT,
   POLL_INTERVAL,
   TIMEZONE,
@@ -221,11 +222,19 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   const resetIdleTimer = () => {
     if (idleTimer) clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => {
+    idleTimer = setTimeout(async () => {
       logger.debug(
         { group: group.name },
         'Idle timeout, closing container stdin',
       );
+      // Send goodbye message if we talked to the user and message is configured
+      if (outputSentToUser && GOODBYE_MESSAGE) {
+        try {
+          await channel.sendMessage(chatJid, GOODBYE_MESSAGE);
+        } catch (err) {
+          logger.warn({ error: err }, 'Failed to send goodbye message');
+        }
+      }
       queue.closeStdin(chatJid);
     }, IDLE_TIMEOUT);
   };
