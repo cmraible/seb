@@ -721,16 +721,18 @@ async function main(): Promise<void> {
     if (mainJid) {
       const channel = findChannel(channels, mainJid);
       if (channel) {
-        let commitHash = '';
+        let commitInfo = '';
         try {
-          commitHash = execSync('git rev-parse --short HEAD', {
+          commitInfo = execSync('git log -1 --format="%h %s"', {
             encoding: 'utf-8',
           }).trim();
         } catch {
           // not in a git repo
         }
-        const version = commitHash || 'unknown';
-        await channel.sendMessage(mainJid, `NanoClaw started (${version})`);
+        await channel.sendMessage(
+          mainJid,
+          `NanoClaw started (${commitInfo || 'unknown'})`,
+        );
       }
     }
   } catch (err) {
