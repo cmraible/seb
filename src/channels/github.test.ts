@@ -878,7 +878,7 @@ describe('GitHubChannel bot username bypass', () => {
     server.close();
   });
 
-  it('registers bot-authored PR with requiresTrigger false', async () => {
+  it('registers bot-authored PR with requiresTrigger false and botUsername trigger', async () => {
     opts = createTestOpts();
     channel = new GitHubChannel(
       SECRET,
@@ -912,6 +912,7 @@ describe('GitHubChannel bot username bypass', () => {
     expect(opts.registerGroup).toHaveBeenCalledWith(
       'gh:cmraible/seb#10',
       expect.objectContaining({
+        trigger: '@seb-writes-code',
         requiresTrigger: false,
       }),
     );
