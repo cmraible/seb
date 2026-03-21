@@ -29,6 +29,8 @@ export interface TelegramChannelOpts {
   registerGroup?: (jid: string, group: RegisteredGroup) => void;
   getActiveTasks?: () => ScheduledTask[];
   cancelTask?: (taskId: string) => void;
+  pauseTask?: (taskId: string) => void;
+  resumeTask?: (taskId: string) => void;
 }
 
 export class TelegramChannel implements Channel {
@@ -103,11 +105,18 @@ export class TelegramChannel implements Channel {
         let line = `*${num}.* ${preview}\n    ⏰ ${schedule}`;
         if (nextRun) line += ` (next: ${nextRun})`;
         if (groupName) line += `\n    📍 ${groupName}`;
-        if (t.status === 'running') line += '\n    🔄 Currently running';
+        if (t.status === 'running') line += '\n    🔄 Running';
+        if (t.status === 'paused') line += '\n    ⏸ Paused';
         lines.push(line);
 
-        keyboard.text(`✕ Cancel ${num}`, `cancel_task:${t.id}`);
-        if (i % 2 === 1 || i === tasks.length - 1) keyboard.row();
+        // Pause/resume button depending on status
+        if (t.status === 'paused') {
+          keyboard.text(`▶ ${num}`, `resume_task:${t.id}`);
+        } else {
+          keyboard.text(`⏸ ${num}`, `pause_task:${t.id}`);
+        }
+        keyboard.text(`✕ ${num}`, `cancel_task:${t.id}`);
+        keyboard.row();
       }
 
       ctx.reply(lines.join('\n\n'), {
@@ -116,41 +125,71 @@ export class TelegramChannel implements Channel {
       });
     });
 
-    // Handle inline button callbacks for task cancellation
+    // Handle inline button callbacks for task management
     this.bot.on('callback_query:data', async (ctx) => {
       const data = ctx.callbackQuery.data;
-      if (!data.startsWith('cancel_task:')) return;
 
-      const taskId = data.slice('cancel_task:'.length);
-
-      if (!this.opts.cancelTask || !this.opts.getActiveTasks) {
-        await ctx.answerCallbackQuery({ text: 'Task management unavailable.' });
-        return;
+      if (data.startsWith('cancel_task:')) {
+        const taskId = data.slice('cancel_task:'.length);
+        if (!this.opts.cancelTask || !this.opts.getActiveTasks) {
+          await ctx.answerCallbackQuery({
+            text: 'Task management unavailable.',
+          });
+          return;
+        }
+        const tasks = this.opts.getActiveTasks();
+        const task = tasks.find((t) => t.id === taskId);
+        if (!task) {
+          await ctx.answerCallbackQuery({
+            text: 'Task not found or already cancelled.',
+          });
+          return;
+        }
+        this.opts.cancelTask(taskId);
+        await ctx.answerCallbackQuery({ text: '✅ Task cancelled.' });
+        try {
+          await ctx.editMessageText(
+            `${ctx.callbackQuery.message?.text}\n\n✅ Cancelled: ${task.prompt.slice(0, 60)}`,
+          );
+        } catch {
+          // Message may have been deleted or is too old to edit
+        }
+        logger.info({ taskId }, 'Task cancelled via inline button');
+      } else if (data.startsWith('pause_task:')) {
+        const taskId = data.slice('pause_task:'.length);
+        if (!this.opts.pauseTask || !this.opts.getActiveTasks) {
+          await ctx.answerCallbackQuery({
+            text: 'Task management unavailable.',
+          });
+          return;
+        }
+        const tasks = this.opts.getActiveTasks();
+        const task = tasks.find((t) => t.id === taskId);
+        if (!task) {
+          await ctx.answerCallbackQuery({ text: 'Task not found.' });
+          return;
+        }
+        this.opts.pauseTask(taskId);
+        await ctx.answerCallbackQuery({ text: '⏸ Task paused.' });
+        logger.info({ taskId }, 'Task paused via inline button');
+      } else if (data.startsWith('resume_task:')) {
+        const taskId = data.slice('resume_task:'.length);
+        if (!this.opts.resumeTask || !this.opts.getActiveTasks) {
+          await ctx.answerCallbackQuery({
+            text: 'Task management unavailable.',
+          });
+          return;
+        }
+        const tasks = this.opts.getActiveTasks();
+        const task = tasks.find((t) => t.id === taskId);
+        if (!task) {
+          await ctx.answerCallbackQuery({ text: 'Task not found.' });
+          return;
+        }
+        this.opts.resumeTask(taskId);
+        await ctx.answerCallbackQuery({ text: '▶ Task resumed.' });
+        logger.info({ taskId }, 'Task resumed via inline button');
       }
-
-      // Verify the task still exists
-      const tasks = this.opts.getActiveTasks();
-      const task = tasks.find((t) => t.id === taskId);
-      if (!task) {
-        await ctx.answerCallbackQuery({
-          text: 'Task not found or already cancelled.',
-        });
-        return;
-      }
-
-      this.opts.cancelTask(taskId);
-      await ctx.answerCallbackQuery({ text: '✅ Task cancelled.' });
-
-      // Update the message to show the task was cancelled
-      try {
-        await ctx.editMessageText(
-          `${ctx.callbackQuery.message?.text}\n\n✅ Cancelled: ${task.prompt.slice(0, 60)}`,
-        );
-      } catch {
-        // Message may have been deleted or is too old to edit
-      }
-
-      logger.info({ taskId }, 'Task cancelled via inline button');
     });
 
     this.bot.on('message:text', async (ctx) => {
@@ -497,5 +536,7 @@ registerChannel('telegram', (opts: ChannelOpts) => {
     registerGroup: opts.registerGroup,
     getActiveTasks: opts.getActiveTasks,
     cancelTask: opts.cancelTask,
+    pauseTask: opts.pauseTask,
+    resumeTask: opts.resumeTask,
   });
 });
