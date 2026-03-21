@@ -418,7 +418,9 @@ export class GitHubChannel implements Channel {
         this.opts.registerGroup(chatJid, {
           name: chatName,
           folder,
-          trigger: `@${ASSISTANT_NAME}`,
+          trigger: this.botUsername
+            ? `@${this.botUsername}`
+            : `@${ASSISTANT_NAME}`,
           added_at: timestamp,
           requiresTrigger: !isBotAuthor,
           metadata,
