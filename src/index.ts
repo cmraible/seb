@@ -43,6 +43,7 @@ import {
   recoverRunningTasks,
   storeChatMetadata,
   storeMessage,
+  updateTask,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { writeGroupTemplate, resolveGroupFolderPath } from './group-folder.js';
@@ -644,9 +645,14 @@ async function main(): Promise<void> {
     registerGroup,
     getActiveTasks: () =>
       getAllTasks().filter(
-        (t) => t.status === 'active' || t.status === 'running',
+        (t) =>
+          t.status === 'active' ||
+          t.status === 'running' ||
+          t.status === 'paused',
       ),
     cancelTask: (taskId: string) => deleteTask(taskId),
+    pauseTask: (taskId: string) => updateTask(taskId, { status: 'paused' }),
+    resumeTask: (taskId: string) => updateTask(taskId, { status: 'active' }),
   };
 
   // Create and connect all registered channels.
