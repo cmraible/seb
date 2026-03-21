@@ -265,7 +265,11 @@ function buildRuntimeEnv(): Record<string, string> {
 
   // Pass non-Anthropic secrets that tools inside the container need.
   // These don't go through the credential proxy — they're passed as env vars.
-  const toolSecrets = readEnvFile(['GITHUB_TOKEN', 'OP_SERVICE_ACCOUNT_TOKEN']);
+  const toolSecrets = readEnvFile([
+    'GITHUB_TOKEN',
+    'OP_SERVICE_ACCOUNT_TOKEN',
+    'LINEAR_ACCESS_TOKEN',
+  ]);
   for (const [key, value] of Object.entries(toolSecrets)) {
     if (value) env[key] = value;
   }
