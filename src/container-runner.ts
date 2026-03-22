@@ -275,6 +275,20 @@ function buildRuntimeEnv(): Record<string, string> {
     if (value) env[key] = value;
   }
 
+  // Read persisted Linear OAuth token if available
+  const linearOAuthFile = path.join(DATA_DIR, 'linear-oauth.json');
+  try {
+    if (fs.existsSync(linearOAuthFile)) {
+      const raw = fs.readFileSync(linearOAuthFile, 'utf-8');
+      const data = JSON.parse(raw);
+      if (data.access_token) {
+        env.LINEAR_ACCESS_TOKEN = data.access_token;
+      }
+    }
+  } catch {
+    // Ignore — Linear MCP will simply be unavailable
+  }
+
   // Run as host user so bind-mounted files are accessible.
   // Skip when running as root (uid 0), as the container's node user (uid 1000),
   // or when getuid is unavailable (native Windows without WSL).
