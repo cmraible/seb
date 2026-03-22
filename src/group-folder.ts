@@ -335,9 +335,9 @@ gh pr create --title "..." --body "..."
 
 Send an \`[action:Created PR] #123\` activity.
 
-### Step 6: Update Linear issue
-- Use \`mcp__linear__save_issue\` to update the issue status to "In Progress" or "Done"
-- Link the PR to the issue
+### Step 6: Wrap up
+- Link the PR to the Linear issue
+- Do NOT change the issue status — linking a PR automatically sets it to "In Review", and it will move to "Done" when the PR is merged
 - Send your final response (no prefix) summarizing what you did
 
 ## Available Tools
