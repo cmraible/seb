@@ -1,4 +1,6 @@
 import crypto from 'crypto';
+import express from 'express';
+import http from 'http';
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 
 // --- Mocks ---
@@ -22,8 +24,26 @@ import { ChannelOpts } from './registry.js';
 
 // --- Test helpers ---
 
+function createApp(): express.Application {
+  return express();
+}
+
+function startServer(
+  app: express.Application,
+): Promise<{ server: http.Server; port: number }> {
+  return new Promise((resolve, reject) => {
+    const server = app.listen(0, () => {
+      const addr = server.address() as import('net').AddressInfo;
+      resolve({ server, port: addr.port });
+    });
+    server.on('error', reject);
+  });
+}
+
 function createTestOpts(overrides?: Partial<ChannelOpts>): ChannelOpts {
+  const app = createApp();
   return {
+    app,
     onMessage: vi.fn(),
     onChatMetadata: vi.fn(),
     registeredGroups: vi.fn(() => ({})),
@@ -58,7 +78,7 @@ async function sendWebhook(
   if (!opts.skipSignature) {
     headers['X-Hub-Signature-256'] = sign(opts.secret, body);
   }
-  return fetch(`http://localhost:${port}/webhook`, {
+  return fetch(`http://localhost:${port}/github/webhook`, {
     method: 'POST',
     headers,
     body,
@@ -96,21 +116,23 @@ describe('makeGitHubFolder', () => {
 describe('GitHubChannel', () => {
   const SECRET = 'test-webhook-secret';
   let port: number;
+  let server: http.Server;
   let channel: GitHubChannel;
   let opts: ChannelOpts;
 
   beforeEach(async () => {
     vi.clearAllMocks();
     opts = createTestOpts();
-    // Use port 0 to get a random available port
-    channel = new GitHubChannel(SECRET, 0, 'test-github-token', [], opts);
+    channel = new GitHubChannel(SECRET, 'test-github-token', [], opts);
     await channel.connect();
-    const addr = (channel as any).server.address();
-    port = addr.port;
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
   });
 
   afterEach(async () => {
     await channel.disconnect();
+    server.close();
   });
 
   // --- Connection lifecycle ---
@@ -128,7 +150,6 @@ describe('GitHubChannel', () => {
     it('isConnected() returns false before connect', () => {
       const ch = new GitHubChannel(
         SECRET,
-        0,
         'test-github-token',
         [],
         createTestOpts(),
@@ -142,7 +163,7 @@ describe('GitHubChannel', () => {
   describe('signature verification', () => {
     it('rejects requests with invalid signature', async () => {
       const body = JSON.stringify({ repository: { full_name: 'a/b' } });
-      const res = await fetch(`http://localhost:${port}/webhook`, {
+      const res = await fetch(`http://localhost:${port}/github/webhook`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -156,7 +177,7 @@ describe('GitHubChannel', () => {
     });
 
     it('rejects requests with missing signature', async () => {
-      const res = await fetch(`http://localhost:${port}/webhook`, {
+      const res = await fetch(`http://localhost:${port}/github/webhook`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -170,7 +191,7 @@ describe('GitHubChannel', () => {
 
     it('rejects requests with missing event header', async () => {
       const body = '{}';
-      const res = await fetch(`http://localhost:${port}/webhook`, {
+      const res = await fetch(`http://localhost:${port}/github/webhook`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -699,12 +720,14 @@ describe('GitHubChannel', () => {
 
   // --- Health check ---
 
-  describe('health check', () => {
-    it('returns ok status', async () => {
-      const res = await fetch(`http://localhost:${port}/health`);
+  describe('webhook route', () => {
+    it('responds to POST on /github/webhook', async () => {
+      const res = await sendWebhook(port, {
+        event: 'ping',
+        secret: SECRET,
+        payload: { zen: 'test', repository: { full_name: 'a/b' } },
+      });
       expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body).toEqual({ status: 'ok', channel: 'github' });
     });
   });
 
@@ -846,25 +869,28 @@ describe('extractAuthor', () => {
 describe('GitHubChannel bot username bypass', () => {
   const SECRET = 'test-webhook-secret';
   let port: number;
+  let server: http.Server;
   let channel: GitHubChannel;
   let opts: ChannelOpts;
 
   afterEach(async () => {
     await channel.disconnect();
+    server.close();
   });
 
-  it('registers bot-authored PR with requiresTrigger false', async () => {
+  it('registers bot-authored PR with requiresTrigger false and botUsername trigger', async () => {
     opts = createTestOpts();
     channel = new GitHubChannel(
       SECRET,
-      0,
       'test-token',
       [],
       opts,
       'seb-writes-code',
     );
     await channel.connect();
-    port = (channel as any).server.address().port;
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
 
     await sendWebhook(port, {
       event: 'pull_request',
@@ -886,23 +912,25 @@ describe('GitHubChannel bot username bypass', () => {
     expect(opts.registerGroup).toHaveBeenCalledWith(
       'gh:cmraible/seb#10',
       expect.objectContaining({
+        trigger: '@seb-writes-code',
         requiresTrigger: false,
       }),
     );
   });
 
-  it('registers non-bot PR with requiresTrigger true', async () => {
+  it('registers non-bot PR with requiresTrigger false (auto-review)', async () => {
     opts = createTestOpts();
     channel = new GitHubChannel(
       SECRET,
-      0,
       'test-token',
       [],
       opts,
       'seb-writes-code',
     );
     await channel.connect();
-    port = (channel as any).server.address().port;
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
 
     await sendWebhook(port, {
       event: 'pull_request',
@@ -924,7 +952,7 @@ describe('GitHubChannel bot username bypass', () => {
     expect(opts.registerGroup).toHaveBeenCalledWith(
       'gh:cmraible/seb#11',
       expect.objectContaining({
-        requiresTrigger: true,
+        requiresTrigger: false,
       }),
     );
   });
@@ -933,14 +961,15 @@ describe('GitHubChannel bot username bypass', () => {
     opts = createTestOpts();
     channel = new GitHubChannel(
       SECRET,
-      0,
       'test-token',
       [],
       opts,
       'seb-writes-code',
     );
     await channel.connect();
-    port = (channel as any).server.address().port;
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
 
     await sendWebhook(port, {
       event: 'issue_comment',
@@ -971,11 +1000,13 @@ describe('GitHubChannel bot username bypass', () => {
     );
   });
 
-  it('requires trigger when botUsername is not set', async () => {
+  it('skips trigger for PRs even when botUsername is not set', async () => {
     opts = createTestOpts();
-    channel = new GitHubChannel(SECRET, 0, 'test-token', [], opts);
+    channel = new GitHubChannel(SECRET, 'test-token', [], opts);
     await channel.connect();
-    port = (channel as any).server.address().port;
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
 
     await sendWebhook(port, {
       event: 'pull_request',
@@ -997,7 +1028,7 @@ describe('GitHubChannel bot username bypass', () => {
     expect(opts.registerGroup).toHaveBeenCalledWith(
       'gh:cmraible/seb#12',
       expect.objectContaining({
-        requiresTrigger: true,
+        requiresTrigger: false,
       }),
     );
   });
@@ -1008,18 +1039,22 @@ describe('GitHubChannel bot username bypass', () => {
 describe('GitHubChannel sender allowlist', () => {
   const SECRET = 'test-webhook-secret';
   let port: number;
+  let server: http.Server;
   let channel: GitHubChannel;
   let opts: ChannelOpts;
 
   afterEach(async () => {
     await channel.disconnect();
+    server.close();
   });
 
   it('delivers events from allowed senders', async () => {
     opts = createTestOpts();
-    channel = new GitHubChannel(SECRET, 0, 'test-token', ['alice'], opts);
+    channel = new GitHubChannel(SECRET, 'test-token', ['alice'], opts);
     await channel.connect();
-    port = (channel as any).server.address().port;
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
 
     await sendWebhook(port, {
       event: 'issues',
@@ -1041,9 +1076,11 @@ describe('GitHubChannel sender allowlist', () => {
 
   it('drops events from non-allowed senders', async () => {
     opts = createTestOpts();
-    channel = new GitHubChannel(SECRET, 0, 'test-token', ['alice'], opts);
+    channel = new GitHubChannel(SECRET, 'test-token', ['alice'], opts);
     await channel.connect();
-    port = (channel as any).server.address().port;
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
 
     await sendWebhook(port, {
       event: 'issues',
@@ -1066,9 +1103,11 @@ describe('GitHubChannel sender allowlist', () => {
 
   it('allows all senders when allowlist is empty', async () => {
     opts = createTestOpts();
-    channel = new GitHubChannel(SECRET, 0, 'test-token', [], opts);
+    channel = new GitHubChannel(SECRET, 'test-token', [], opts);
     await channel.connect();
-    port = (channel as any).server.address().port;
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
 
     await sendWebhook(port, {
       event: 'issues',
@@ -1090,9 +1129,11 @@ describe('GitHubChannel sender allowlist', () => {
 
   it('delivers check_suite events even from non-allowed senders', async () => {
     opts = createTestOpts();
-    channel = new GitHubChannel(SECRET, 0, 'test-token', ['alice'], opts);
+    channel = new GitHubChannel(SECRET, 'test-token', ['alice'], opts);
     await channel.connect();
-    port = (channel as any).server.address().port;
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
 
     await sendWebhook(port, {
       event: 'check_suite',
@@ -1113,17 +1154,49 @@ describe('GitHubChannel sender allowlist', () => {
     expect(opts.onMessage).toHaveBeenCalled();
   });
 
-  it('supports multiple allowed senders', async () => {
+  it('delivers events from the bot username even when not in allowlist', async () => {
     opts = createTestOpts();
     channel = new GitHubChannel(
       SECRET,
-      0,
       'test-token',
-      ['alice', 'bob'],
+      ['alice'],
       opts,
+      'my-bot',
     );
     await channel.connect();
-    port = (channel as any).server.address().port;
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
+
+    await sendWebhook(port, {
+      event: 'pull_request',
+      secret: SECRET,
+      payload: {
+        action: 'opened',
+        repository: { full_name: 'cmraible/seb' },
+        pull_request: {
+          number: 42,
+          title: 'Auto-fix',
+          html_url: 'https://github.com/cmraible/seb/pull/42',
+          user: { login: 'my-bot' },
+          head: { ref: 'fix/auto' },
+          base: { ref: 'main' },
+          body: '',
+        },
+        sender: { login: 'my-bot' },
+      },
+    });
+
+    expect(opts.onMessage).toHaveBeenCalled();
+  });
+
+  it('supports multiple allowed senders', async () => {
+    opts = createTestOpts();
+    channel = new GitHubChannel(SECRET, 'test-token', ['alice', 'bob'], opts);
+    await channel.connect();
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
 
     await sendWebhook(port, {
       event: 'issues',
@@ -1149,19 +1222,23 @@ describe('GitHubChannel sender allowlist', () => {
 describe('GitHubChannel ack', () => {
   const SECRET = 'test-webhook-secret';
   let port: number;
+  let server: http.Server;
   let channel: GitHubChannel;
   let opts: ChannelOpts;
 
   beforeEach(async () => {
     vi.clearAllMocks();
     opts = createTestOpts();
-    channel = new GitHubChannel(SECRET, 0, 'test-github-token', [], opts);
+    channel = new GitHubChannel(SECRET, 'test-github-token', [], opts);
     await channel.connect();
-    port = (channel as any).server.address().port;
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
   });
 
   afterEach(async () => {
     await channel.disconnect();
+    server.close();
   });
 
   it('issue_comment webhook includes metadata with comment ID', async () => {
@@ -1283,7 +1360,8 @@ describe('GitHubChannel ack', () => {
   });
 
   it('ack() does nothing without token', async () => {
-    const noTokenChannel = new GitHubChannel(SECRET, 0, '', [], opts);
+    const noTokenOpts = createTestOpts();
+    const noTokenChannel = new GitHubChannel(SECRET, '', [], noTokenOpts);
     await noTokenChannel.connect();
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
 

@@ -1,5 +1,7 @@
 import { execSync } from 'child_process';
+import express from 'express';
 import fs from 'fs';
+import http from 'http';
 import path from 'path';
 
 import {
@@ -13,6 +15,7 @@ import {
   TRIGGER_PATTERN,
 } from './config.js';
 import { startCredentialProxy } from './credential-proxy.js';
+import { readEnvFile } from './env.js';
 import './channels/index.js';
 import {
   getChannelFactory,
@@ -537,12 +540,17 @@ async function main(): Promise<void> {
     PROXY_BIND_HOST,
   );
 
+  // Declared here so the shutdown handler closure can see it;
+  // assigned after channels are connected and the webhook server starts.
+  let webhookServer: http.Server | null = null;
+
   // Graceful shutdown handlers
   let webAppServer: import('http').Server | null = null;
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
     proxyServer.close();
     webAppServer?.close();
+    if (webhookServer) webhookServer.close();
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
     process.exit(0);
@@ -592,8 +600,17 @@ async function main(): Promise<void> {
     }
   }
 
+  // Shared Express app for webhook channels
+  const webhookApp = express();
+
+  // Shared health endpoint
+  webhookApp.get('/health', (_req, res) => {
+    res.json({ status: 'ok', channels: channels.map((c) => c.name) });
+  });
+
   // Channel callbacks (shared by all channels)
   const channelOpts = {
+    app: webhookApp,
     onMessage: (chatJid: string, msg: NewMessage) => {
       // Remote control commands — intercept before storage
       const trimmed = msg.content.trim();
@@ -656,6 +673,7 @@ async function main(): Promise<void> {
     cancelTask: (taskId: string) => deleteTask(taskId),
     pauseTask: (taskId: string) => updateTask(taskId, { status: 'paused' }),
     resumeTask: (taskId: string) => updateTask(taskId, { status: 'active' }),
+    requestRestart: () => shutdown('RESTART'),
   };
 
   // Create and connect all registered channels.
@@ -677,6 +695,27 @@ async function main(): Promise<void> {
   if (channels.length === 0) {
     logger.fatal('No channels connected');
     process.exit(1);
+  }
+
+  // Start shared webhook server if any webhook channel is active
+  const webhookChannelNames = ['github', 'linear'];
+  const hasWebhookChannel = channels.some((ch) =>
+    webhookChannelNames.includes(ch.name),
+  );
+  if (hasWebhookChannel) {
+    const envVars = readEnvFile(['WEBHOOK_PORT']);
+    const webhookPort = parseInt(
+      process.env.WEBHOOK_PORT || envVars.WEBHOOK_PORT || '3000',
+      10,
+    );
+    webhookServer = await new Promise<http.Server>((resolve, reject) => {
+      const server = webhookApp.listen(webhookPort, () => {
+        logger.info({ port: webhookPort }, 'Shared webhook server listening');
+        console.log(`\n  Webhooks: http://localhost:${webhookPort}`);
+        resolve(server);
+      });
+      server.on('error', reject);
+    });
   }
 
   // Initialize Telegram bot pool for agent teams (send-only bots)

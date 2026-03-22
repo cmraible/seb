@@ -71,6 +71,10 @@ You have read-write access to the user's Obsidian vault at `/workspace/extra/obs
 
 When the user asks you to take notes, remember something long-term, or work on the knowledge base, use the vault.
 
+## Pull Requests
+
+When creating a PR on GitHub, always request a review from the repo owner (cmraible) using `gh pr create --reviewer cmraible` or `gh pr edit --add-reviewer cmraible`.
+
 ## Agent Teams
 
 When creating a team to tackle a complex task, follow these rules:
