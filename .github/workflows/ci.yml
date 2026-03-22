@@ -5,7 +5,7 @@ on:
     branches: [main]
 
 jobs:
-  ci:
+  gitleaks:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -14,6 +14,11 @@ jobs:
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -28,3 +33,16 @@ jobs:
 
       - name: Tests
         run: npx vitest run
+
+  all-checks-passed:
+    if: always()
+    needs: [gitleaks, ci]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check all jobs
+        run: |
+          if [[ "${{ needs.gitleaks.result }}" != "success" || "${{ needs.ci.result }}" != "success" ]]; then
+            echo "One or more checks failed"
+            exit 1
+          fi
+          echo "All checks passed"
