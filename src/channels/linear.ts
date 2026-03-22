@@ -31,10 +31,11 @@ function parseActivityType(text: string): AgentActivity {
     /^\[action:([^\]|]+)(?:\|([^\]]*))?\]\s*([\s\S]*)/,
   );
   if (actionMatch) {
+    const actionName = actionMatch[1].trim();
     return {
       type: 'action',
-      action: actionMatch[1].trim(),
-      parameter: actionMatch[2]?.trim(),
+      action: actionName,
+      parameter: actionMatch[2]?.trim() || actionName,
       content: actionMatch[3].trim(),
     };
   }
@@ -793,8 +794,7 @@ export class LinearChannel implements Channel {
     // Build content based on type
     let content: Record<string, string>;
     if (type === 'action') {
-      content = { type: 'action', action: action || body };
-      if (parameter) content.parameter = parameter;
+      content = { type: 'action', action: action || body, parameter: parameter || action || body };
       if (body && body !== action) content.result = body;
     } else {
       content = { type, body };
@@ -962,10 +962,27 @@ export class LinearChannel implements Channel {
         );
         return;
       } catch (err) {
-        logger.error(
-          { jid, identifier, sessionId, err },
-          'Failed to post agent session activity, falling back to comment',
+        logger.warn(
+          { jid, identifier, sessionId, err, activityType: activity.type },
+          'Failed to post agent session activity, retrying as response',
         );
+        // If the activity type failed, retry as a simple response (most reliable type)
+        if (activity.type !== 'response') {
+          try {
+            await this.postAgentActivity(sessionId, token, activity.content, 'response');
+            logger.info(
+              { jid, identifier, sessionId, length: text.length },
+              'Linear agent session activity posted (fallback to response)',
+            );
+            return;
+          } catch (retryErr) {
+            logger.error(
+              { jid, identifier, sessionId, err: retryErr },
+              'Failed to post agent session activity even as response, falling back to comment',
+            );
+          }
+        }
+        // Only delete session if we truly can't post ANY activity
         this.activeAgentSessions.delete(jid);
         // Fall through to comment
       }
