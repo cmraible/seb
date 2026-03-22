@@ -3,6 +3,7 @@
  * Wraps the Docker CLI to implement the Runtime interface.
  */
 import { ChildProcess, execSync, spawn } from 'child_process';
+import os from 'os';
 
 import { logger } from '../logger.js';
 import {
@@ -129,7 +130,7 @@ export class DockerRuntime implements Runtime {
   }
 
   stopCommand(name: string): string {
-    return `${DOCKER_BIN} stop ${name}`;
+    return `${DOCKER_BIN} stop -t 1 ${name}`;
   }
 
   /** Returns CLI args for a readonly bind mount. */
@@ -154,6 +155,12 @@ export class DockerRuntime implements Runtime {
       env.HOME = '/home/node';
       delete env._NANOCLAW_HOST_UID;
       delete env._NANOCLAW_HOST_GID;
+    }
+
+    // On Linux, host.docker.internal isn't built-in — add it so containers
+    // can reach the credential proxy on the host.
+    if (os.platform() === 'linux') {
+      args.push('--add-host=host.docker.internal:host-gateway');
     }
 
     // Pass environment variables

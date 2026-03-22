@@ -29,11 +29,12 @@ RUN apt-get update && apt-get install -y \
     make \
     g++ \
     python3 \
+    unzip \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
     && curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/gpg.key | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg \
     && echo "deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main" > /etc/apt/sources.list.d/caddy-stable.list \
-    && apt-get update && apt-get install -y gh caddy default-mysql-server default-mysql-client \
+    && apt-get update && apt-get install -y gh caddy \
     && rm -rf /var/lib/apt/lists/*
 
 # Install gitleaks for pre-commit secret scanning
@@ -41,7 +42,7 @@ RUN curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.24.0/gi
     | tar -xz -C /usr/local/bin gitleaks
 
 # Install Go toolchain (for Hubris project development)
-ENV GOLANG_VERSION=1.23.6
+ENV GOLANG_VERSION=1.24.1
 RUN curl -fsSL "https://go.dev/dl/go${GOLANG_VERSION}.linux-$(dpkg --print-architecture).tar.gz" | tar -C /usr/local -xzf -
 ENV PATH="/usr/local/go/bin:/home/node/go/bin:${PATH}"
 ENV GOPATH="/home/node/go"
@@ -50,6 +51,9 @@ ENV GOPATH="/home/node/go"
 RUN go install github.com/a-h/templ/cmd/templ@latest && \
     go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest && \
     go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest
+
+# Install Bun runtime
+RUN curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash
 
 # Install Mailpit (email testing server)
 RUN curl -sL https://raw.githubusercontent.com/axllent/mailpit/develop/install.sh | bash

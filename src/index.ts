@@ -1,16 +1,21 @@
 import { execSync } from 'child_process';
+import express from 'express';
 import fs from 'fs';
+import http from 'http';
 import path from 'path';
 
 import {
   ASSISTANT_NAME,
   CREDENTIAL_PROXY_PORT,
+  GOODBYE_MESSAGE,
   IDLE_TIMEOUT,
   POLL_INTERVAL,
+  TELEGRAM_BOT_POOL,
   TIMEZONE,
   TRIGGER_PATTERN,
 } from './config.js';
 import { startCredentialProxy } from './credential-proxy.js';
+import { readEnvFile } from './env.js';
 import './channels/index.js';
 import {
   getChannelFactory,
@@ -25,6 +30,7 @@ import {
 } from './container-runner.js';
 import { PROXY_BIND_HOST } from './container-runtime.js';
 import {
+  deleteTask,
   getAllChats,
   getAllRegisteredGroups,
   getAllSessions,
@@ -40,11 +46,18 @@ import {
   recoverRunningTasks,
   storeChatMetadata,
   storeMessage,
+  updateTask,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
-import { copyGroupTemplate, resolveGroupFolderPath } from './group-folder.js';
+import { writeGroupTemplate, resolveGroupFolderPath } from './group-folder.js';
+import { initBotPool } from './channels/telegram.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
+import {
+  restoreRemoteControl,
+  startRemoteControl,
+  stopRemoteControl,
+} from './remote-control.js';
 import {
   isSenderAllowed,
   isTriggerAllowed,
@@ -63,6 +76,11 @@ let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
+
+// In-memory cache of message metadata (e.g. telegram_message_id) keyed by message ID.
+// Metadata isn't persisted to SQLite, so we keep it here for the ack flow.
+const messageMetadataCache = new Map<string, Record<string, string>>();
+const MAX_METADATA_CACHE_SIZE = 500;
 
 /**
  * Check whether any message in the batch contains a trigger word
@@ -120,11 +138,14 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
   // Create group folder
   fs.mkdirSync(path.join(groupDir, 'logs'), { recursive: true });
 
-  // Copy CLAUDE.md template if one matches this folder pattern
+  // Write CLAUDE.md template based on channel context (e.g. GitHub PR/issue)
   try {
-    copyGroupTemplate(group.folder);
+    writeGroupTemplate(group.folder, jid, group.metadata);
   } catch (err) {
-    logger.warn({ folder: group.folder, err }, 'Failed to copy group template');
+    logger.warn(
+      { folder: group.folder, err },
+      'Failed to write group template',
+    );
   }
 
   logger.info(
@@ -207,44 +228,64 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   const resetIdleTimer = () => {
     if (idleTimer) clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => {
+    idleTimer = setTimeout(async () => {
       logger.debug(
         { group: group.name },
         'Idle timeout, closing container stdin',
       );
+      // Send goodbye message if we talked to the user and message is configured
+      if (outputSentToUser && GOODBYE_MESSAGE) {
+        try {
+          await channel.sendMessage(chatJid, GOODBYE_MESSAGE);
+        } catch (err) {
+          logger.warn({ error: err }, 'Failed to send goodbye message');
+        }
+      }
       queue.closeStdin(chatJid);
     }, IDLE_TIMEOUT);
   };
 
-  channel
-    .setTyping?.(chatJid, true)
-    ?.catch((err) =>
-      logger.warn({ chatJid, err }, 'Failed to set typing indicator'),
-    );
+  // Extract ack context from the last message with cached metadata (the triggering message)
+  // so the agent container can ack it on startup.
+  // Metadata is stored in-memory (not in SQLite), so look it up from the cache.
+  const ackMessage = [...missedMessages]
+    .reverse()
+    .find((m) => messageMetadataCache.has(m.id));
+  const ackContext = ackMessage
+    ? messageMetadataCache.get(ackMessage.id)
+    : undefined;
+
   let hadError = false;
   let outputSentToUser = false;
 
-  const output = await runAgent(group, prompt, chatJid, async (result) => {
-    // Streaming output callback — called for each agent result
-    if (result.result) {
-      const raw =
-        typeof result.result === 'string'
-          ? result.result
-          : JSON.stringify(result.result);
-      const text = formatOutbound(raw);
-      logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
-      if (text) {
-        await channel.sendMessage(chatJid, text);
-        outputSentToUser = true;
+  const output = await runAgent(
+    group,
+    prompt,
+    chatJid,
+    ackContext,
+    async (result) => {
+      // Streaming output callback — called for each agent result
+      if (result.result) {
+        const raw =
+          typeof result.result === 'string'
+            ? result.result
+            : JSON.stringify(result.result);
+        // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
+        const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+        logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
+        if (text) {
+          await channel.sendMessage(chatJid, text);
+          outputSentToUser = true;
+        }
+        // Only reset idle timer on actual results, not session-update markers (result: null)
+        resetIdleTimer();
       }
-      // Only reset idle timer on actual results, not session-update markers (result: null)
-      resetIdleTimer();
-    }
 
-    if (result.status === 'error') {
-      hadError = true;
-    }
-  });
+      if (result.status === 'error') {
+        hadError = true;
+      }
+    },
+  );
 
   channel
     .setTyping?.(chatJid, false)
@@ -280,6 +321,7 @@ async function runAgent(
   group: RegisteredGroup,
   prompt: string,
   chatJid: string,
+  ackContext?: Record<string, string>,
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
@@ -303,7 +345,12 @@ async function runAgent(
 
   // Update available groups snapshot (main group only can see all groups)
   const availableGroups = getAvailableGroups();
-  writeGroupsSnapshot(group.folder, isMain, availableGroups);
+  writeGroupsSnapshot(
+    group.folder,
+    isMain,
+    availableGroups,
+    new Set(Object.keys(registeredGroups)),
+  );
 
   // Wrap onOutput to track session ID from streamed results
   const wrappedOnOutput = onOutput
@@ -326,6 +373,7 @@ async function runAgent(
         chatJid,
         isMain,
         assistantName: ASSISTANT_NAME,
+        ackContext,
       },
       (instance, containerName) =>
         queue.registerProcess(chatJid, instance, containerName, group.folder),
@@ -424,15 +472,21 @@ async function startMessageLoop(): Promise<void> {
               { chatJid, count: messagesToSend.length },
               'Piped messages to active container',
             );
+            // Ack directly — container is already running so IPC startup ack won't fire
+            const lastMsg = [...messagesToSend]
+              .reverse()
+              .find((m) => messageMetadataCache.has(m.id));
+            if (lastMsg && channel.ack) {
+              const meta = messageMetadataCache.get(lastMsg.id);
+              channel
+                .ack(chatJid, meta)
+                .catch((err) =>
+                  logger.warn({ chatJid, err }, 'Failed to ack piped message'),
+                );
+            }
             lastAgentTimestamp[chatJid] =
               messagesToSend[messagesToSend.length - 1].timestamp;
             saveState();
-            // Show typing indicator while the container processes the piped message
-            channel
-              .setTyping?.(chatJid, true)
-              ?.catch((err) =>
-                logger.warn({ chatJid, err }, 'Failed to set typing indicator'),
-              );
           } else {
             // No active container — enqueue for a new one
             queue.enqueueMessageCheck(chatJid);
@@ -477,6 +531,7 @@ async function main(): Promise<void> {
   }
 
   loadState();
+  restoreRemoteControl();
 
   // Start credential proxy (containers route API calls through this)
   const proxyServer = await startCredentialProxy(
@@ -484,10 +539,15 @@ async function main(): Promise<void> {
     PROXY_BIND_HOST,
   );
 
+  // Declared here so the shutdown handler closure can see it;
+  // assigned after channels are connected and the webhook server starts.
+  let webhookServer: http.Server | null = null;
+
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
     proxyServer.close();
+    if (webhookServer) webhookServer.close();
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
     process.exit(0);
@@ -495,9 +555,75 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
 
+  // Handle /rc (and legacy /remote-control) commands
+  async function handleRemoteControl(
+    command: string,
+    chatJid: string,
+    msg: NewMessage,
+  ): Promise<void> {
+    const group = registeredGroups[chatJid];
+    if (!group?.isMain) {
+      logger.warn(
+        { chatJid, sender: msg.sender },
+        'Remote control rejected: not main group',
+      );
+      return;
+    }
+
+    const channel = findChannel(channels, chatJid);
+    if (!channel) return;
+
+    if (command === '/rc' || command === '/remote-control') {
+      const result = await startRemoteControl(
+        msg.sender,
+        chatJid,
+        process.cwd(),
+      );
+      if (result.ok) {
+        await channel.sendMessage(chatJid, result.url);
+      } else {
+        await channel.sendMessage(
+          chatJid,
+          `Remote Control failed: ${result.error}`,
+        );
+      }
+    } else {
+      const result = stopRemoteControl();
+      if (result.ok) {
+        await channel.sendMessage(chatJid, 'Remote Control session ended.');
+      } else {
+        await channel.sendMessage(chatJid, result.error);
+      }
+    }
+  }
+
+  // Shared Express app for webhook channels
+  const webhookApp = express();
+
+  // Shared health endpoint
+  webhookApp.get('/health', (_req, res) => {
+    res.json({ status: 'ok', channels: channels.map((c) => c.name) });
+  });
+
   // Channel callbacks (shared by all channels)
   const channelOpts = {
+    app: webhookApp,
     onMessage: (chatJid: string, msg: NewMessage) => {
+      // Remote control commands — intercept before storage
+      const trimmed = msg.content.trim();
+      if (
+        trimmed === '/rc' ||
+        trimmed === '/rc-end' ||
+        trimmed === '/rcend' ||
+        trimmed === '/remote-control' ||
+        trimmed === '/remote-control-end'
+      ) {
+        handleRemoteControl(trimmed, chatJid, msg).catch((err) =>
+          logger.error({ err, chatJid }, 'Remote control command error'),
+        );
+        return;
+      }
+
       // Sender allowlist drop mode: discard messages from denied senders before storing
       if (!msg.is_from_me && !msg.is_bot_message && registeredGroups[chatJid]) {
         const cfg = loadSenderAllowlist();
@@ -514,6 +640,15 @@ async function main(): Promise<void> {
           return;
         }
       }
+      // Cache metadata (e.g. telegram_message_id) before storing — SQLite doesn't persist it
+      if (msg.metadata && Object.keys(msg.metadata).length > 0) {
+        messageMetadataCache.set(msg.id, msg.metadata);
+        // Evict oldest entries if cache grows too large
+        if (messageMetadataCache.size > MAX_METADATA_CACHE_SIZE) {
+          const firstKey = messageMetadataCache.keys().next().value;
+          if (firstKey) messageMetadataCache.delete(firstKey);
+        }
+      }
       storeMessage(msg);
     },
     onChatMetadata: (
@@ -525,6 +660,17 @@ async function main(): Promise<void> {
     ) => storeChatMetadata(chatJid, timestamp, name, channel, isGroup),
     registeredGroups: () => registeredGroups,
     registerGroup,
+    getActiveTasks: () =>
+      getAllTasks().filter(
+        (t) =>
+          t.status === 'active' ||
+          t.status === 'running' ||
+          t.status === 'paused',
+      ),
+    cancelTask: (taskId: string) => deleteTask(taskId),
+    pauseTask: (taskId: string) => updateTask(taskId, { status: 'paused' }),
+    resumeTask: (taskId: string) => updateTask(taskId, { status: 'active' }),
+    requestRestart: () => shutdown('RESTART'),
   };
 
   // Create and connect all registered channels.
@@ -546,6 +692,32 @@ async function main(): Promise<void> {
   if (channels.length === 0) {
     logger.fatal('No channels connected');
     process.exit(1);
+  }
+
+  // Start shared webhook server if any webhook channel is active
+  const webhookChannelNames = ['github', 'linear'];
+  const hasWebhookChannel = channels.some((ch) =>
+    webhookChannelNames.includes(ch.name),
+  );
+  if (hasWebhookChannel) {
+    const envVars = readEnvFile(['WEBHOOK_PORT']);
+    const webhookPort = parseInt(
+      process.env.WEBHOOK_PORT || envVars.WEBHOOK_PORT || '3000',
+      10,
+    );
+    webhookServer = await new Promise<http.Server>((resolve, reject) => {
+      const server = webhookApp.listen(webhookPort, () => {
+        logger.info({ port: webhookPort }, 'Shared webhook server listening');
+        console.log(`\n  Webhooks: http://localhost:${webhookPort}`);
+        resolve(server);
+      });
+      server.on('error', reject);
+    });
+  }
+
+  // Initialize Telegram bot pool for agent teams (send-only bots)
+  if (TELEGRAM_BOT_POOL.length > 0) {
+    await initBotPool(TELEGRAM_BOT_POOL);
   }
 
   // Start subsystems (independently of connection handler)
@@ -573,6 +745,10 @@ async function main(): Promise<void> {
       if (!text) return Promise.resolve();
       return channel.sendMessage(jid, text);
     },
+    ack: async (jid, context) => {
+      const channel = findChannel(channels, jid);
+      if (channel?.ack) await channel.ack(jid, context);
+    },
     registeredGroups: () => registeredGroups,
     registerGroup,
     syncGroups: async (force: boolean) => {
@@ -583,10 +759,53 @@ async function main(): Promise<void> {
       );
     },
     getAvailableGroups,
-    writeGroupsSnapshot: (gf, im, ag) => writeGroupsSnapshot(gf, im, ag),
+    writeGroupsSnapshot: (gf, im, ag, rj) =>
+      writeGroupsSnapshot(gf, im, ag, rj),
+    onTasksChanged: () => {
+      const tasks = getAllTasks();
+      const taskRows = tasks.map((t) => ({
+        id: t.id,
+        groupFolder: t.group_folder,
+        prompt: t.prompt,
+        schedule_type: t.schedule_type,
+        schedule_value: t.schedule_value,
+        status: t.status,
+        next_run: t.next_run,
+      }));
+      for (const group of Object.values(registeredGroups)) {
+        writeTasksSnapshot(group.folder, group.isMain === true, taskRows);
+      }
+    },
   });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
+
+  // Notify main group that NanoClaw has started
+  try {
+    const mainJid = Object.entries(registeredGroups).find(
+      ([, g]) => g.isMain,
+    )?.[0];
+    if (mainJid) {
+      const channel = findChannel(channels, mainJid);
+      if (channel) {
+        let commitInfo = '';
+        try {
+          commitInfo = execSync('git log -1 --format="%h %s"', {
+            encoding: 'utf-8',
+          }).trim();
+        } catch {
+          // not in a git repo
+        }
+        await channel.sendMessage(
+          mainJid,
+          `NanoClaw started (${commitInfo || 'unknown'})`,
+        );
+      }
+    }
+  } catch (err) {
+    logger.warn({ err }, 'Failed to send startup notification');
+  }
+
   startMessageLoop();
 }
 

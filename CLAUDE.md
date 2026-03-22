@@ -56,6 +56,13 @@ npm run format       # Auto-fix formatting
 
 CI runs on every pull request to `main` (format check → typecheck → tests). A pre-commit hook runs `prettier --write` automatically.
 
+## Contributing
+
+- Branch protection is enabled for `main` — all changes must go through a PR
+- PRs require review and approval from codeowners before merging
+- CI and Gitleaks checks must pass
+- When a PR is ready for review, enable auto-merge — it will merge automatically once approved
+
 Service management:
 ```bash
 # macOS (launchd)
@@ -71,7 +78,7 @@ systemctl --user restart nanoclaw
 
 ## Troubleshooting
 
-**WhatsApp not connecting after upgrade:** WhatsApp is now a separate skill, not bundled in core. Run `/add-whatsapp` (or `npx tsx scripts/apply-skill.ts .claude/skills/add-whatsapp && npm run build`) to install it. Existing auth credentials and groups are preserved.
+**WhatsApp not connecting after upgrade:** WhatsApp is now a separate channel fork, not bundled in core. Run `/add-whatsapp` (or `git remote add whatsapp https://github.com/qwibitai/nanoclaw-whatsapp.git && git fetch whatsapp main && (git merge whatsapp/main || { git checkout --theirs package-lock.json && git add package-lock.json && git merge --continue; }) && npm run build`) to install it. Existing auth credentials and groups are preserved.
 
 ## Container Build Cache
 

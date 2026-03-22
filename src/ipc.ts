@@ -3,7 +3,13 @@ import path from 'path';
 
 import { CronExpressionParser } from 'cron-parser';
 
-import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
+import {
+  DATA_DIR,
+  IPC_POLL_INTERVAL,
+  TELEGRAM_BOT_POOL,
+  TIMEZONE,
+} from './config.js';
+import { sendPoolMessage } from './channels/telegram.js';
 import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
@@ -12,6 +18,7 @@ import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
+  ack: (chatJid: string, context?: Record<string, string>) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -20,7 +27,9 @@ export interface IpcDeps {
     groupFolder: string,
     isMain: boolean,
     availableGroups: AvailableGroup[],
+    registeredJids: Set<string>,
   ) => void;
+  onTasksChanged: () => void;
 }
 
 let ipcWatcherRunning = false;
@@ -79,9 +88,22 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   isMain ||
                   (targetGroup && targetGroup.folder === sourceGroup)
                 ) {
-                  await deps.sendMessage(data.chatJid, data.text);
+                  if (
+                    data.sender &&
+                    data.chatJid.startsWith('tg:') &&
+                    TELEGRAM_BOT_POOL.length > 0
+                  ) {
+                    await sendPoolMessage(
+                      data.chatJid,
+                      data.text,
+                      data.sender,
+                      sourceGroup,
+                    );
+                  } else {
+                    await deps.sendMessage(data.chatJid, data.text);
+                  }
                   logger.info(
-                    { chatJid: data.chatJid, sourceGroup },
+                    { chatJid: data.chatJid, sourceGroup, sender: data.sender },
                     'IPC message sent',
                   );
                 } else {
@@ -90,6 +112,13 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     'Unauthorized IPC message attempt blocked',
                   );
                 }
+              } else if (data.type === 'ack' && data.chatJid) {
+                // Agent container confirming it's alive — dispatch channel ack
+                await deps.ack(data.chatJid, data.context);
+                logger.info(
+                  { chatJid: data.chatJid, sourceGroup },
+                  'IPC ack dispatched',
+                );
               } else {
                 logger.warn(
                   { sourceGroup, file, type: data.type },
@@ -290,6 +319,7 @@ export async function processTaskIpc(
           { taskId, sourceGroup, targetFolder, contextMode },
           'Task created via IPC',
         );
+        deps.onTasksChanged();
       }
       break;
 
@@ -302,6 +332,7 @@ export async function processTaskIpc(
             { taskId: data.taskId, sourceGroup },
             'Task paused via IPC',
           );
+          deps.onTasksChanged();
         } else {
           logger.warn(
             { taskId: data.taskId, sourceGroup },
@@ -320,6 +351,7 @@ export async function processTaskIpc(
             { taskId: data.taskId, sourceGroup },
             'Task resumed via IPC',
           );
+          deps.onTasksChanged();
         } else {
           logger.warn(
             { taskId: data.taskId, sourceGroup },
@@ -338,6 +370,7 @@ export async function processTaskIpc(
             { taskId: data.taskId, sourceGroup },
             'Task cancelled via IPC',
           );
+          deps.onTasksChanged();
         } else {
           logger.warn(
             { taskId: data.taskId, sourceGroup },
@@ -408,6 +441,7 @@ export async function processTaskIpc(
           { taskId: data.taskId, sourceGroup, updates },
           'Task updated via IPC',
         );
+        deps.onTasksChanged();
       }
       break;
 
@@ -421,7 +455,12 @@ export async function processTaskIpc(
         await deps.syncGroups(true);
         // Write updated snapshot immediately
         const availableGroups = deps.getAvailableGroups();
-        deps.writeGroupsSnapshot(sourceGroup, true, availableGroups);
+        deps.writeGroupsSnapshot(
+          sourceGroup,
+          true,
+          availableGroups,
+          new Set(Object.keys(registeredGroups)),
+        );
       } else {
         logger.warn(
           { sourceGroup },

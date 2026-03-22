@@ -17,6 +17,7 @@ import {
   IDLE_TIMEOUT,
   TIMEZONE,
 } from './config.js';
+import { readEnvFile } from './env.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { CONTAINER_HOST_GATEWAY } from './container-runtime.js';
@@ -38,6 +39,7 @@ export interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
+  ackContext?: Record<string, string>;
 }
 
 export interface ContainerOutput {
@@ -181,8 +183,13 @@ function buildVolumeMounts(
     group.folder,
     'agent-runner-src',
   );
-  if (!fs.existsSync(groupAgentRunnerDir) && fs.existsSync(agentRunnerSrc)) {
-    fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
+  if (fs.existsSync(agentRunnerSrc)) {
+    // Always sync from the repo so deploys pick up agent-runner changes.
+    // cpSync with force overwrites stale per-group copies.
+    fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, {
+      recursive: true,
+      force: true,
+    });
   }
   mounts.push({
     hostPath: groupAgentRunnerDir,
@@ -198,6 +205,16 @@ function buildVolumeMounts(
       hostPath: gmailDir,
       containerPath: '/home/node/.gmail-mcp',
       readonly: false, // MCP may need to refresh tokens
+    });
+  }
+
+  // SSH keys (read-only — dedicated agent key for git push and remote access)
+  const agentSshDir = path.join(DATA_DIR, 'ssh');
+  if (fs.existsSync(agentSshDir)) {
+    mounts.push({
+      hostPath: agentSshDir,
+      containerPath: '/home/node/.ssh',
+      readonly: true,
     });
   }
 
@@ -244,6 +261,32 @@ function buildRuntimeEnv(): Record<string, string> {
     env.ANTHROPIC_API_KEY = 'placeholder';
   } else {
     env.CLAUDE_CODE_OAUTH_TOKEN = 'placeholder';
+  }
+
+  // Pass non-Anthropic secrets that tools inside the container need.
+  // These don't go through the credential proxy — they're passed as env vars.
+  const toolSecrets = readEnvFile([
+    'GITHUB_TOKEN',
+    'OP_SERVICE_ACCOUNT_TOKEN',
+    'LINEAR_CLIENT_ID',
+    'LINEAR_CLIENT_SECRET',
+  ]);
+  for (const [key, value] of Object.entries(toolSecrets)) {
+    if (value) env[key] = value;
+  }
+
+  // Read persisted Linear OAuth token if available
+  const linearOAuthFile = path.join(DATA_DIR, 'linear-oauth.json');
+  try {
+    if (fs.existsSync(linearOAuthFile)) {
+      const raw = fs.readFileSync(linearOAuthFile, 'utf-8');
+      const data = JSON.parse(raw);
+      if (data.access_token) {
+        env.LINEAR_ACCESS_TOKEN = data.access_token;
+      }
+    }
+  } catch {
+    // Ignore — Linear MCP will simply be unavailable
   }
 
   // Run as host user so bind-mounted files are accessible.
@@ -511,9 +554,22 @@ export async function runContainerAgent(
       const isError = code !== 0;
 
       if (isVerbose || isError) {
+        // On error, log input metadata only — not the full prompt.
+        // Full input is only included at verbose level to avoid
+        // persisting user conversation content on every non-zero exit.
+        if (isVerbose) {
+          logLines.push(`=== Input ===`, JSON.stringify(input, null, 2), ``);
+        } else {
+          logLines.push(
+            `=== Input Summary ===`,
+            `Prompt length: ${input.prompt.length} chars`,
+            `Session ID: ${input.sessionId || 'new'}`,
+            ``,
+          );
+        }
         logLines.push(
-          `=== Input ===`,
-          JSON.stringify(input, null, 2),
+          `=== Container ===`,
+          `Name: ${containerName}, Runtime: ${runtimeType}`,
           ``,
           `=== Mounts ===`,
           mounts
@@ -689,6 +745,7 @@ export function writeGroupsSnapshot(
   groupFolder: string,
   isMain: boolean,
   groups: AvailableGroup[],
+  registeredJids: Set<string>,
 ): void {
   const groupIpcDir = resolveGroupIpcPath(groupFolder);
   fs.mkdirSync(groupIpcDir, { recursive: true });

@@ -1,6 +1,5 @@
 import crypto from 'crypto';
 import express from 'express';
-import http from 'http';
 
 import { ASSISTANT_NAME } from '../config.js';
 import { readEnvFile } from '../env.js';
@@ -77,15 +76,92 @@ function extractIssueNumber(event: string, payload: any): number | null {
   }
 }
 
+/**
+ * Determine the GitHub group type from a webhook event.
+ * Returns 'pull_request', 'issue', or 'repo'.
+ */
+function extractGroupType(
+  event: string,
+  payload: any,
+): 'pull_request' | 'issue' | 'repo' {
+  switch (event) {
+    case 'pull_request':
+    case 'pull_request_review':
+    case 'pull_request_review_comment':
+      return 'pull_request';
+    case 'issues':
+      return 'issue';
+    case 'issue_comment':
+      // issue_comment fires for both issues and PRs; check for PR indicator
+      return payload.issue?.pull_request ? 'pull_request' : 'issue';
+    case 'check_suite':
+      return payload.check_suite?.pull_requests?.length
+        ? 'pull_request'
+        : 'repo';
+    default:
+      return 'repo';
+  }
+}
+
+/** Extract the title from a webhook payload (PR title or issue title). */
+function extractTitle(event: string, payload: any): string | undefined {
+  switch (event) {
+    case 'pull_request':
+    case 'pull_request_review':
+    case 'pull_request_review_comment':
+      return payload.pull_request?.title;
+    case 'issues':
+    case 'issue_comment':
+      return payload.issue?.title;
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Extract the author (opener) of the issue or PR from a webhook payload.
+ * For check_suite events, uses the head_commit author as a best-effort
+ * approximation (the actual PR author isn't in the webhook payload).
+ */
+export function extractAuthor(event: string, payload: any): string | null {
+  switch (event) {
+    case 'pull_request':
+    case 'pull_request_review':
+    case 'pull_request_review_comment':
+      return payload.pull_request?.user?.login ?? null;
+    case 'issues':
+    case 'issue_comment':
+      return payload.issue?.user?.login ?? null;
+    case 'check_suite':
+      // The check_suite payload doesn't include the PR author directly.
+      // Use the head_commit author as a proxy — for bot PRs, the bot is
+      // typically the committer.
+      return (
+        payload.check_suite?.head_commit?.author?.login ??
+        payload.check_suite?.head_commit?.committer?.login ??
+        null
+      );
+    default:
+      return null;
+  }
+}
+
+interface FormattedEvent {
+  text: string;
+  metadata?: Record<string, string>;
+}
+
 /** Format a GitHub webhook event into a human-readable message */
-function formatEvent(event: string, payload: any): string | null {
+function formatEvent(event: string, payload: any): FormattedEvent | null {
   const repo = payload.repository?.full_name || 'unknown';
 
   switch (event) {
     case 'issues': {
       const { action, issue } = payload;
       if (action === 'opened' || action === 'closed' || action === 'reopened') {
-        return `[GitHub] Issue ${action}: #${issue.number} "${issue.title}" in ${repo}\n${issue.html_url}`;
+        return {
+          text: `[GitHub] Issue ${action}: #${issue.number} "${issue.title}" in ${repo}\n${issue.html_url}`,
+        };
       }
       return null;
     }
@@ -96,10 +172,18 @@ function formatEvent(event: string, payload: any): string | null {
         action === 'opened' ||
         action === 'closed' ||
         action === 'reopened' ||
-        action === 'ready_for_review'
+        action === 'ready_for_review' ||
+        action === 'synchronize'
       ) {
-        const merged = action === 'closed' && pr.merged ? 'merged' : action;
-        return `[GitHub] PR ${merged}: #${pr.number} "${pr.title}" in ${repo}\n${pr.html_url}`;
+        const label =
+          action === 'closed' && pr.merged
+            ? 'merged'
+            : action === 'synchronize'
+              ? 'updated'
+              : action;
+        return {
+          text: `[GitHub] PR ${label}: #${pr.number} "${pr.title}" in ${repo}\n${pr.html_url}`,
+        };
       }
       return null;
     }
@@ -112,7 +196,14 @@ function formatEvent(event: string, payload: any): string | null {
           comment.body.length > 200
             ? comment.body.slice(0, 200) + '...'
             : comment.body;
-        return `[GitHub] New comment on ${type} #${issue.number} "${issue.title}" by ${comment.user.login}:\n${body}\n${comment.html_url}`;
+        return {
+          text: `[GitHub] New comment on ${type} #${issue.number} "${issue.title}" by ${comment.user.login}:\n${body}\n${comment.html_url}`,
+          metadata: {
+            github_repo: repo,
+            github_comment_id: String(comment.id),
+            github_endpoint: 'issues',
+          },
+        };
       }
       return null;
     }
@@ -120,7 +211,9 @@ function formatEvent(event: string, payload: any): string | null {
     case 'pull_request_review': {
       const { action, review, pull_request: pr } = payload;
       if (action === 'submitted' && review.state !== 'commented') {
-        return `[GitHub] PR #${pr.number} "${pr.title}" review: ${review.state} by ${review.user.login}\n${review.html_url}`;
+        return {
+          text: `[GitHub] PR #${pr.number} "${pr.title}" review: ${review.state} by ${review.user.login}\n${review.html_url}`,
+        };
       }
       return null;
     }
@@ -132,7 +225,14 @@ function formatEvent(event: string, payload: any): string | null {
           comment.body.length > 200
             ? comment.body.slice(0, 200) + '...'
             : comment.body;
-        return `[GitHub] Review comment on PR #${pr.number} "${pr.title}" by ${comment.user.login}:\n${body}\n${comment.html_url}`;
+        return {
+          text: `[GitHub] Review comment on PR #${pr.number} "${pr.title}" by ${comment.user.login}:\n${body}\n${comment.html_url}`,
+          metadata: {
+            github_repo: repo,
+            github_comment_id: String(comment.id),
+            github_endpoint: 'pulls',
+          },
+        };
       }
       return null;
     }
@@ -141,7 +241,9 @@ function formatEvent(event: string, payload: any): string | null {
       const { action, check_suite: suite } = payload;
       if (action === 'completed' && suite.conclusion !== 'success') {
         const branch = suite.head_branch || 'unknown';
-        return `[GitHub] Check suite ${suite.conclusion} on ${branch} in ${repo}\n${suite.url}`;
+        return {
+          text: `[GitHub] Check suite ${suite.conclusion} on ${branch} in ${repo}\n${suite.url}`,
+        };
       }
       return null;
     }
@@ -154,36 +256,39 @@ function formatEvent(event: string, payload: any): string | null {
 export class GitHubChannel implements Channel {
   name = 'github';
 
-  private server: http.Server | null = null;
+  private connected = false;
   private opts: ChannelOpts;
   private webhookSecret: string;
-  private port: number;
   private token: string;
   /** If set, only process events from these GitHub usernames */
   private allowedSenders: Set<string> | null;
+  /** GitHub username of the bot — PRs opened by this user skip the trigger */
+  private botUsername: string;
 
   constructor(
     webhookSecret: string,
-    port: number,
     token: string,
     allowedSenders: string[],
     opts: ChannelOpts,
+    botUsername: string = '',
   ) {
     this.webhookSecret = webhookSecret;
-    this.port = port;
     this.token = token;
     this.allowedSenders =
       allowedSenders.length > 0 ? new Set(allowedSenders) : null;
     this.opts = opts;
+    this.botUsername = botUsername;
   }
 
   async connect(): Promise<void> {
-    const app = express();
+    const app = this.opts.app;
+    if (!app) {
+      throw new Error(
+        'GitHub channel requires a shared Express app via opts.app',
+      );
+    }
 
-    // Parse raw body for signature verification
-    app.use(express.json({ limit: '1mb' }));
-
-    app.post('/webhook', (req, res) => {
+    app.post('/github/webhook', express.json({ limit: '1mb' }), (req, res) => {
       const signature = req.headers['x-hub-signature-256'] as string;
       const event = req.headers['x-github-event'] as string;
       const deliveryId = req.headers['x-github-delivery'] as string;
@@ -221,8 +326,15 @@ export class GitHubChannel implements Channel {
       const senderName =
         payload.sender?.login || payload.sender?.id?.toString() || 'github';
 
-      // Filter by allowed senders if configured
-      if (this.allowedSenders && !this.allowedSenders.has(senderName)) {
+      // Filter by allowed senders if configured.
+      // Skip filtering for check_suite events — the sender is always GitHub/Actions,
+      // not the PR author, so the allowlist would incorrectly block all CI events.
+      if (
+        event !== 'check_suite' &&
+        this.allowedSenders &&
+        !this.allowedSenders.has(senderName) &&
+        senderName !== this.botUsername
+      ) {
         logger.debug(
           { sender: senderName, event },
           'GitHub event from non-allowed sender, skipping',
@@ -230,71 +342,155 @@ export class GitHubChannel implements Channel {
         return;
       }
 
-      // Determine the JID: per-issue/PR if possible, otherwise repo-level
-      const issueNumber = extractIssueNumber(event, payload);
-      const chatJid = issueNumber ? `gh:${repo}#${issueNumber}` : `gh:${repo}`;
-
-      // Store chat metadata for discovery
-      const chatName = issueNumber ? `${repo}#${issueNumber}` : repo;
-      this.opts.onChatMetadata(chatJid, timestamp, chatName, 'github', false);
-
-      // Auto-register group if not already registered
-      if (this.opts.registerGroup) {
-        const registered = this.opts.registeredGroups();
-        if (!registered[chatJid]) {
-          const folder = issueNumber
-            ? makeGitHubFolder(repo, issueNumber)
-            : `github_${repo
-                .replace(/\//g, '-')
-                .replace(/[^A-Za-z0-9-]/g, '')
-                .slice(0, 57)}`;
-          this.opts.registerGroup(chatJid, {
-            name: chatName,
-            folder,
-            trigger: `@${ASSISTANT_NAME}`,
-            added_at: timestamp,
-            requiresTrigger: false,
-          });
-          logger.info({ chatJid, folder }, 'Auto-registered GitHub group');
-        }
-      }
-
-      // Format the event into a human-readable message
-      const text = formatEvent(event, payload);
-      if (!text) return;
-
-      // Deliver message
-      this.opts.onMessage(chatJid, {
-        id: deliveryId || crypto.randomUUID(),
-        chat_jid: chatJid,
-        sender: senderName,
-        sender_name: senderName,
-        content: text,
-        timestamp,
-        is_from_me: false,
-      });
-
-      logger.info(
-        { event, repo, chatJid, deliveryId },
-        'GitHub webhook event processed',
+      // Process asynchronously (already acknowledged with 200)
+      this.processWebhook(event, payload, repo, senderName, deliveryId).catch(
+        (err) =>
+          logger.error({ err, event, repo }, 'Error processing GitHub webhook'),
       );
     });
 
-    // Health check
-    app.get('/health', (_req, res) => {
-      res.json({ status: 'ok', channel: 'github' });
+    this.connected = true;
+    logger.info('GitHub webhook routes mounted on /github/webhook');
+  }
+
+  private async processWebhook(
+    event: string,
+    payload: any,
+    repo: string,
+    senderName: string,
+    deliveryId: string,
+  ): Promise<void> {
+    const timestamp = new Date().toISOString();
+
+    // Determine the JID: per-issue/PR if possible, otherwise repo-level.
+    // For check_suite from forks, pull_requests is often empty — look up via API.
+    let issueNumber = extractIssueNumber(event, payload);
+    let prAuthorFromApi: string | null = null;
+    if (!issueNumber && event === 'check_suite' && this.token) {
+      const headSha = payload.check_suite?.head_sha;
+      if (headSha) {
+        const prInfo = await this.findPrByHeadSha(repo, headSha);
+        if (prInfo) {
+          issueNumber = prInfo.number;
+          prAuthorFromApi = prInfo.author;
+        }
+      }
+    }
+    const chatJid = issueNumber ? `gh:${repo}#${issueNumber}` : `gh:${repo}`;
+
+    // Store chat metadata for discovery
+    const chatName = issueNumber ? `${repo}#${issueNumber}` : repo;
+    this.opts.onChatMetadata(chatJid, timestamp, chatName, 'github', false);
+
+    // Auto-register group if not already registered
+    if (this.opts.registerGroup) {
+      const registered = this.opts.registeredGroups();
+      if (!registered[chatJid]) {
+        const folder = issueNumber
+          ? makeGitHubFolder(repo, issueNumber)
+          : `github_${repo
+              .replace(/\//g, '-')
+              .replace(/[^A-Za-z0-9-]/g, '')
+              .slice(0, 57)}`;
+        const groupType = extractGroupType(event, payload);
+        const title = extractTitle(event, payload);
+        const metadata: Record<string, string> = { type: groupType };
+        if (title) metadata.title = title;
+
+        // PRs skip trigger so the agent processes all events autonomously
+        // (auto-review on open/update, CI fix on check_suite, etc.).
+        // Issues require a trigger unless opened/assigned to the bot.
+        const author = extractAuthor(event, payload) || prAuthorFromApi;
+        const isBotAuthor = !!this.botUsername && author === this.botUsername;
+        const skipTrigger = groupType === 'pull_request' || isBotAuthor;
+        this.opts.registerGroup(chatJid, {
+          name: chatName,
+          folder,
+          trigger: this.botUsername
+            ? `@${this.botUsername}`
+            : `@${ASSISTANT_NAME}`,
+          added_at: timestamp,
+          requiresTrigger: !skipTrigger,
+          metadata,
+        });
+        logger.info(
+          { chatJid, folder, author, isBotAuthor },
+          'Auto-registered GitHub group',
+        );
+      } else if (
+        event === 'check_suite' &&
+        registered[chatJid].requiresTrigger !== false
+      ) {
+        // Group already exists but might have been registered before we knew
+        // it was the bot's own PR. Update requiresTrigger if needed.
+        const author = extractAuthor(event, payload) || prAuthorFromApi;
+        const isBotAuthor = !!this.botUsername && author === this.botUsername;
+        if (isBotAuthor) {
+          this.opts.registerGroup(chatJid, {
+            ...registered[chatJid],
+            requiresTrigger: false,
+          });
+          logger.info(
+            { chatJid, author },
+            'Updated GitHub group to skip trigger (bot PR)',
+          );
+        }
+      }
+    }
+
+    // Format the event into a human-readable message
+    const formatted = formatEvent(event, payload);
+    if (!formatted) return;
+
+    // Deliver message
+    this.opts.onMessage(chatJid, {
+      id: deliveryId || crypto.randomUUID(),
+      chat_jid: chatJid,
+      sender: senderName,
+      sender_name: senderName,
+      content: formatted.text,
+      timestamp,
+      is_from_me: false,
+      metadata: formatted.metadata,
     });
 
-    return new Promise<void>((resolve, reject) => {
-      this.server = app.listen(this.port, () => {
-        logger.info({ port: this.port }, 'GitHub webhook server listening');
-        console.log(
-          `\n  GitHub webhooks: http://localhost:${this.port}/webhook`,
-        );
-        resolve();
+    logger.info(
+      { event, repo, chatJid, deliveryId },
+      'GitHub webhook event processed',
+    );
+  }
+
+  /**
+   * Look up the PR number associated with a commit SHA via the GitHub API.
+   * Used for check_suite events from forks where pull_requests is empty.
+   */
+  private async findPrByHeadSha(
+    repo: string,
+    headSha: string,
+  ): Promise<{ number: number; author: string } | null> {
+    try {
+      const url = `https://api.github.com/repos/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=30`;
+      const res = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          Accept: 'application/vnd.github+json',
+        },
       });
-      this.server.on('error', reject);
-    });
+      if (!res.ok) return null;
+      const pulls = (await res.json()) as any[];
+      const match = pulls.find((pr: any) => pr.head.sha === headSha);
+      if (match) {
+        logger.debug(
+          { repo, headSha, prNumber: match.number, author: match.user?.login },
+          'Resolved check_suite head SHA to PR',
+        );
+        return { number: match.number, author: match.user?.login ?? '' };
+      }
+      return null;
+    } catch (err) {
+      logger.warn({ err, repo, headSha }, 'Failed to look up PR by head SHA');
+      return null;
+    }
   }
 
   async sendMessage(jid: string, text: string): Promise<void> {
@@ -346,8 +542,54 @@ export class GitHubChannel implements Channel {
     }
   }
 
+  async ack(jid: string, context?: Record<string, string>): Promise<void> {
+    if (!this.token || !context) return;
+    const repo = context.github_repo;
+    const commentId = context.github_comment_id;
+    const endpoint = context.github_endpoint as 'issues' | 'pulls' | undefined;
+    if (!repo || !commentId || !endpoint) return;
+    await this.addReaction(repo, parseInt(commentId, 10), 'eyes', endpoint);
+  }
+
+  private async addReaction(
+    repo: string,
+    commentId: number,
+    reaction: string,
+    endpoint: 'issues' | 'pulls',
+  ): Promise<void> {
+    const apiPath =
+      endpoint === 'pulls'
+        ? `repos/${repo}/pulls/comments/${commentId}/reactions`
+        : `repos/${repo}/issues/comments/${commentId}/reactions`;
+    const url = `https://api.github.com/${apiPath}`;
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ content: reaction }),
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        logger.warn(
+          { repo, commentId, reaction, status: res.status, body },
+          'GitHub API error adding reaction',
+        );
+      }
+    } catch (err) {
+      logger.warn(
+        { repo, commentId, reaction, err },
+        'Failed to add GitHub reaction',
+      );
+    }
+  }
+
   isConnected(): boolean {
-    return this.server !== null && this.server.listening;
+    return this.connected;
   }
 
   ownsJid(jid: string): boolean {
@@ -355,29 +597,20 @@ export class GitHubChannel implements Channel {
   }
 
   async disconnect(): Promise<void> {
-    if (this.server) {
-      await new Promise<void>((resolve) => {
-        this.server!.close(() => resolve());
-      });
-      this.server = null;
-      logger.info('GitHub webhook server stopped');
-    }
+    this.connected = false;
+    logger.info('GitHub channel disconnected');
   }
 }
 
 registerChannel('github', (opts: ChannelOpts) => {
   const envVars = readEnvFile([
     'GITHUB_WEBHOOK_SECRET',
-    'GITHUB_WEBHOOK_PORT',
     'GITHUB_TOKEN',
     'GITHUB_ALLOWED_SENDERS',
+    'GITHUB_BOT_USERNAME',
   ]);
   const secret =
     process.env.GITHUB_WEBHOOK_SECRET || envVars.GITHUB_WEBHOOK_SECRET || '';
-  const port = parseInt(
-    process.env.GITHUB_WEBHOOK_PORT || envVars.GITHUB_WEBHOOK_PORT || '0',
-    10,
-  );
   const token = process.env.GITHUB_TOKEN || envVars.GITHUB_TOKEN || '';
   const allowedSendersRaw =
     process.env.GITHUB_ALLOWED_SENDERS || envVars.GITHUB_ALLOWED_SENDERS || '';
@@ -386,8 +619,8 @@ registerChannel('github', (opts: ChannelOpts) => {
     .map((s) => s.trim())
     .filter(Boolean);
 
-  if (!secret || !port) {
-    logger.warn('GitHub: GITHUB_WEBHOOK_SECRET or GITHUB_WEBHOOK_PORT not set');
+  if (!secret) {
+    logger.warn('GitHub: GITHUB_WEBHOOK_SECRET not set');
     return null;
   }
 
@@ -397,9 +630,19 @@ registerChannel('github', (opts: ChannelOpts) => {
     );
   }
 
+  const botUsername =
+    process.env.GITHUB_BOT_USERNAME || envVars.GITHUB_BOT_USERNAME || '';
+
   if (allowedSenders.length > 0) {
     logger.info({ allowedSenders }, 'GitHub: sender allowlist active');
   }
 
-  return new GitHubChannel(secret, port, token, allowedSenders, opts);
+  if (botUsername) {
+    logger.info(
+      { botUsername },
+      'GitHub: bot username configured — own PRs will skip trigger',
+    );
+  }
+
+  return new GitHubChannel(secret, token, allowedSenders, opts, botUsername);
 });

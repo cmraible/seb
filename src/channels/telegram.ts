@@ -1,7 +1,8 @@
-import { Bot } from 'grammy';
+import { Api, Bot, InlineKeyboard } from 'grammy';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
+import { formatNextRun, formatSchedule } from '../format-schedule.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
@@ -9,6 +10,7 @@ import {
   OnChatMetadata,
   OnInboundMessage,
   RegisteredGroup,
+  ScheduledTask,
 } from '../types.js';
 
 /** Sanitize a string for use as a folder name segment */
@@ -25,6 +27,11 @@ export interface TelegramChannelOpts {
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup?: (jid: string, group: RegisteredGroup) => void;
+  getActiveTasks?: () => ScheduledTask[];
+  cancelTask?: (taskId: string) => void;
+  pauseTask?: (taskId: string) => void;
+  resumeTask?: (taskId: string) => void;
+  requestRestart?: () => void;
 }
 
 export class TelegramChannel implements Channel {
@@ -62,6 +69,154 @@ export class TelegramChannel implements Channel {
     // Command to check bot status
     this.bot.command('ping', (ctx) => {
       ctx.reply(`${ASSISTANT_NAME} is online.`);
+    });
+
+    // Command to restart the bot process
+    this.bot.command('restart', async (ctx) => {
+      const topicId = (ctx.message as any)?.message_thread_id;
+      const chatJid = topicId
+        ? `tg:${ctx.chat.id}:${topicId}`
+        : `tg:${ctx.chat.id}`;
+      const group = this.opts.registeredGroups()[chatJid];
+
+      if (!group?.isMain) {
+        await ctx.reply('⚠️ /restart is only available in the main group.');
+        return;
+      }
+
+      if (!this.opts.requestRestart) {
+        await ctx.reply('Restart is not available.');
+        return;
+      }
+
+      logger.info(
+        { requestedBy: ctx.from?.username || ctx.from?.id },
+        'Restart requested via /restart command',
+      );
+      await ctx.reply('Restarting NanoClaw...');
+      this.opts.requestRestart();
+    });
+
+    // Command to list and manage scheduled tasks
+    this.bot.command('tasks', (ctx) => {
+      if (!this.opts.getActiveTasks) {
+        ctx.reply('Task management is not available.');
+        return;
+      }
+
+      const tasks = this.opts.getActiveTasks();
+      if (tasks.length === 0) {
+        ctx.reply('No active scheduled tasks.');
+        return;
+      }
+
+      // Find group names for cross-group task display
+      const groups = this.opts.registeredGroups();
+      const jidToName = new Map<string, string>();
+      for (const [jid, group] of Object.entries(groups)) {
+        jidToName.set(jid, group.name);
+      }
+
+      const lines: string[] = ['📋 *Scheduled Tasks*\n'];
+      const keyboard = new InlineKeyboard();
+
+      for (let i = 0; i < tasks.length; i++) {
+        const t = tasks[i];
+        const num = i + 1;
+        const preview =
+          t.prompt.length > 80 ? t.prompt.slice(0, 77) + '...' : t.prompt;
+        const schedule = formatSchedule(t.schedule_type, t.schedule_value);
+        const nextRun = formatNextRun(t.next_run);
+        const groupName = jidToName.get(t.chat_jid);
+
+        let line = `*${num}.* ${preview}\n    ⏰ ${schedule}`;
+        if (nextRun) line += ` (next: ${nextRun})`;
+        if (groupName) line += `\n    📍 ${groupName}`;
+        if (t.status === 'running') line += '\n    🔄 Running';
+        if (t.status === 'paused') line += '\n    ⏸ Paused';
+        lines.push(line);
+
+        // Pause/resume button depending on status
+        if (t.status === 'paused') {
+          keyboard.text(`▶ ${num}`, `resume_task:${t.id}`);
+        } else {
+          keyboard.text(`⏸ ${num}`, `pause_task:${t.id}`);
+        }
+        keyboard.text(`✕ ${num}`, `cancel_task:${t.id}`);
+        keyboard.row();
+      }
+
+      ctx.reply(lines.join('\n\n'), {
+        parse_mode: 'Markdown',
+        reply_markup: keyboard,
+      });
+    });
+
+    // Handle inline button callbacks for task management
+    this.bot.on('callback_query:data', async (ctx) => {
+      const data = ctx.callbackQuery.data;
+
+      if (data.startsWith('cancel_task:')) {
+        const taskId = data.slice('cancel_task:'.length);
+        if (!this.opts.cancelTask || !this.opts.getActiveTasks) {
+          await ctx.answerCallbackQuery({
+            text: 'Task management unavailable.',
+          });
+          return;
+        }
+        const tasks = this.opts.getActiveTasks();
+        const task = tasks.find((t) => t.id === taskId);
+        if (!task) {
+          await ctx.answerCallbackQuery({
+            text: 'Task not found or already cancelled.',
+          });
+          return;
+        }
+        this.opts.cancelTask(taskId);
+        await ctx.answerCallbackQuery({ text: '✅ Task cancelled.' });
+        try {
+          await ctx.editMessageText(
+            `${ctx.callbackQuery.message?.text}\n\n✅ Cancelled: ${task.prompt.slice(0, 60)}`,
+          );
+        } catch {
+          // Message may have been deleted or is too old to edit
+        }
+        logger.info({ taskId }, 'Task cancelled via inline button');
+      } else if (data.startsWith('pause_task:')) {
+        const taskId = data.slice('pause_task:'.length);
+        if (!this.opts.pauseTask || !this.opts.getActiveTasks) {
+          await ctx.answerCallbackQuery({
+            text: 'Task management unavailable.',
+          });
+          return;
+        }
+        const tasks = this.opts.getActiveTasks();
+        const task = tasks.find((t) => t.id === taskId);
+        if (!task) {
+          await ctx.answerCallbackQuery({ text: 'Task not found.' });
+          return;
+        }
+        this.opts.pauseTask(taskId);
+        await ctx.answerCallbackQuery({ text: '⏸ Task paused.' });
+        logger.info({ taskId }, 'Task paused via inline button');
+      } else if (data.startsWith('resume_task:')) {
+        const taskId = data.slice('resume_task:'.length);
+        if (!this.opts.resumeTask || !this.opts.getActiveTasks) {
+          await ctx.answerCallbackQuery({
+            text: 'Task management unavailable.',
+          });
+          return;
+        }
+        const tasks = this.opts.getActiveTasks();
+        const task = tasks.find((t) => t.id === taskId);
+        if (!task) {
+          await ctx.answerCallbackQuery({ text: 'Task not found.' });
+          return;
+        }
+        this.opts.resumeTask(taskId);
+        await ctx.answerCallbackQuery({ text: '▶ Task resumed.' });
+        logger.info({ taskId }, 'Task resumed via inline button');
+      }
     });
 
     this.bot.on('message:text', async (ctx) => {
@@ -142,14 +297,8 @@ export class TelegramChannel implements Channel {
         return;
       }
 
-      // React with eyes emoji so the user knows the message was seen
-      ctx
-        .react('👀')
-        .catch((err) =>
-          logger.debug({ chatJid, err }, 'Failed to react with eyes emoji'),
-        );
-
       // Deliver message — startMessageLoop() will pick it up
+      // Include telegram metadata so the agent-side ack can react with 👀
       this.opts.onMessage(chatJid, {
         id: msgId,
         chat_jid: chatJid,
@@ -158,6 +307,10 @@ export class TelegramChannel implements Channel {
         content,
         timestamp,
         is_from_me: false,
+        metadata: {
+          telegram_chat_id: String(ctx.chat.id),
+          telegram_message_id: msgId,
+        },
       });
 
       logger.info(
@@ -300,6 +453,101 @@ export class TelegramChannel implements Channel {
       logger.debug({ jid, err }, 'Failed to send Telegram typing indicator');
     }
   }
+
+  async ack(jid: string, context?: Record<string, string>): Promise<void> {
+    if (!this.bot || !context) return;
+    const chatId = context.telegram_chat_id;
+    const messageId = context.telegram_message_id;
+    if (!chatId || !messageId) return;
+    try {
+      await this.bot.api.setMessageReaction(chatId, parseInt(messageId, 10), [
+        { type: 'emoji', emoji: '👀' },
+      ]);
+    } catch (err) {
+      logger.debug({ jid, err }, 'Failed to add Telegram eyes reaction');
+    }
+  }
+}
+
+// Bot pool for agent teams: send-only Api instances (no polling)
+const poolApis: Api[] = [];
+// Maps "{groupFolder}:{senderName}" → pool Api index for stable assignment
+const senderBotMap = new Map<string, number>();
+let nextPoolIndex = 0;
+
+/**
+ * Initialize send-only Api instances for the bot pool.
+ */
+export async function initBotPool(tokens: string[]): Promise<void> {
+  for (const token of tokens) {
+    try {
+      const api = new Api(token);
+      const me = await api.getMe();
+      poolApis.push(api);
+      logger.info(
+        { username: me.username, id: me.id, poolSize: poolApis.length },
+        'Pool bot initialized',
+      );
+    } catch (err) {
+      logger.error({ err }, 'Failed to initialize pool bot');
+    }
+  }
+  if (poolApis.length > 0) {
+    logger.info({ count: poolApis.length }, 'Telegram bot pool ready');
+  }
+}
+
+/**
+ * Send a message via a pool bot assigned to the given sender name.
+ * Assigns bots round-robin on first use; stable per group+sender.
+ */
+export async function sendPoolMessage(
+  chatId: string,
+  text: string,
+  sender: string,
+  groupFolder: string,
+): Promise<void> {
+  if (poolApis.length === 0) return;
+
+  const key = `${groupFolder}:${sender}`;
+  let idx = senderBotMap.get(key);
+  if (idx === undefined) {
+    idx = nextPoolIndex % poolApis.length;
+    nextPoolIndex++;
+    senderBotMap.set(key, idx);
+    try {
+      await poolApis[idx].setMyName(sender);
+      await new Promise((r) => setTimeout(r, 2000));
+      logger.info(
+        { sender, groupFolder, poolIndex: idx },
+        'Assigned and renamed pool bot',
+      );
+    } catch (err) {
+      logger.warn(
+        { sender, err },
+        'Failed to rename pool bot (sending anyway)',
+      );
+    }
+  }
+
+  const api = poolApis[idx];
+  try {
+    const numericId = chatId.replace(/^tg:/, '');
+    const MAX_LENGTH = 4096;
+    if (text.length <= MAX_LENGTH) {
+      await api.sendMessage(numericId, text);
+    } else {
+      for (let i = 0; i < text.length; i += MAX_LENGTH) {
+        await api.sendMessage(numericId, text.slice(i, i + MAX_LENGTH));
+      }
+    }
+    logger.info(
+      { chatId, sender, poolIndex: idx, length: text.length },
+      'Pool message sent',
+    );
+  } catch (err) {
+    logger.error({ chatId, sender, err }, 'Failed to send pool message');
+  }
 }
 
 registerChannel('telegram', (opts: ChannelOpts) => {
@@ -313,5 +561,10 @@ registerChannel('telegram', (opts: ChannelOpts) => {
   return new TelegramChannel(token, {
     ...opts,
     registerGroup: opts.registerGroup,
+    getActiveTasks: opts.getActiveTasks,
+    cancelTask: opts.cancelTask,
+    pauseTask: opts.pauseTask,
+    resumeTask: opts.resumeTask,
+    requestRestart: opts.requestRestart,
   });
 });

@@ -1,4 +1,6 @@
 import crypto from 'crypto';
+import express from 'express';
+import http from 'http';
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 
 // --- Mocks ---
@@ -17,13 +19,31 @@ vi.mock('../logger.js', () => ({
   },
 }));
 
-import { GitHubChannel, makeGitHubFolder } from './github.js';
+import { GitHubChannel, makeGitHubFolder, extractAuthor } from './github.js';
 import { ChannelOpts } from './registry.js';
 
 // --- Test helpers ---
 
+function createApp(): express.Application {
+  return express();
+}
+
+function startServer(
+  app: express.Application,
+): Promise<{ server: http.Server; port: number }> {
+  return new Promise((resolve, reject) => {
+    const server = app.listen(0, () => {
+      const addr = server.address() as import('net').AddressInfo;
+      resolve({ server, port: addr.port });
+    });
+    server.on('error', reject);
+  });
+}
+
 function createTestOpts(overrides?: Partial<ChannelOpts>): ChannelOpts {
+  const app = createApp();
   return {
+    app,
     onMessage: vi.fn(),
     onChatMetadata: vi.fn(),
     registeredGroups: vi.fn(() => ({})),
@@ -58,7 +78,7 @@ async function sendWebhook(
   if (!opts.skipSignature) {
     headers['X-Hub-Signature-256'] = sign(opts.secret, body);
   }
-  return fetch(`http://localhost:${port}/webhook`, {
+  return fetch(`http://localhost:${port}/github/webhook`, {
     method: 'POST',
     headers,
     body,
@@ -96,21 +116,23 @@ describe('makeGitHubFolder', () => {
 describe('GitHubChannel', () => {
   const SECRET = 'test-webhook-secret';
   let port: number;
+  let server: http.Server;
   let channel: GitHubChannel;
   let opts: ChannelOpts;
 
   beforeEach(async () => {
     vi.clearAllMocks();
     opts = createTestOpts();
-    // Use port 0 to get a random available port
-    channel = new GitHubChannel(SECRET, 0, 'test-github-token', [], opts);
+    channel = new GitHubChannel(SECRET, 'test-github-token', [], opts);
     await channel.connect();
-    const addr = (channel as any).server.address();
-    port = addr.port;
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
   });
 
   afterEach(async () => {
     await channel.disconnect();
+    server.close();
   });
 
   // --- Connection lifecycle ---
@@ -128,7 +150,6 @@ describe('GitHubChannel', () => {
     it('isConnected() returns false before connect', () => {
       const ch = new GitHubChannel(
         SECRET,
-        0,
         'test-github-token',
         [],
         createTestOpts(),
@@ -142,7 +163,7 @@ describe('GitHubChannel', () => {
   describe('signature verification', () => {
     it('rejects requests with invalid signature', async () => {
       const body = JSON.stringify({ repository: { full_name: 'a/b' } });
-      const res = await fetch(`http://localhost:${port}/webhook`, {
+      const res = await fetch(`http://localhost:${port}/github/webhook`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -156,7 +177,7 @@ describe('GitHubChannel', () => {
     });
 
     it('rejects requests with missing signature', async () => {
-      const res = await fetch(`http://localhost:${port}/webhook`, {
+      const res = await fetch(`http://localhost:${port}/github/webhook`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -170,7 +191,7 @@ describe('GitHubChannel', () => {
 
     it('rejects requests with missing event header', async () => {
       const body = '{}';
-      const res = await fetch(`http://localhost:${port}/webhook`, {
+      const res = await fetch(`http://localhost:${port}/github/webhook`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -591,7 +612,7 @@ describe('GitHubChannel', () => {
   // --- Auto-registration ---
 
   describe('auto-registration', () => {
-    it('auto-registers group on first event for an issue', async () => {
+    it('auto-registers group with requiresTrigger true by default', async () => {
       await sendWebhook(port, {
         event: 'issues',
         secret: SECRET,
@@ -602,6 +623,7 @@ describe('GitHubChannel', () => {
             number: 42,
             title: 'Bug report',
             html_url: 'https://github.com/cmraible/seb/issues/42',
+            user: { login: 'alice' },
           },
           sender: { login: 'alice' },
         },
@@ -613,7 +635,7 @@ describe('GitHubChannel', () => {
           name: 'cmraible/seb#42',
           folder: 'github_cmraible-seb-42',
           trigger: '@Andy',
-          requiresTrigger: false,
+          requiresTrigger: true,
         }),
       );
     });
@@ -639,6 +661,7 @@ describe('GitHubChannel', () => {
             number: 42,
             title: 'Bug report',
             html_url: 'https://github.com/cmraible/seb/issues/42',
+            user: { login: 'alice' },
           },
           sender: { login: 'alice' },
         },
@@ -647,7 +670,7 @@ describe('GitHubChannel', () => {
       expect(opts.registerGroup).not.toHaveBeenCalled();
     });
 
-    it('auto-registers repo-level group for check_suite without PR', async () => {
+    it('auto-registers repo-level group with requiresTrigger true', async () => {
       await sendWebhook(port, {
         event: 'check_suite',
         secret: SECRET,
@@ -669,7 +692,7 @@ describe('GitHubChannel', () => {
         expect.objectContaining({
           name: 'cmraible/seb',
           folder: 'github_cmraible-seb',
-          requiresTrigger: false,
+          requiresTrigger: true,
         }),
       );
     });
@@ -697,12 +720,14 @@ describe('GitHubChannel', () => {
 
   // --- Health check ---
 
-  describe('health check', () => {
-    it('returns ok status', async () => {
-      const res = await fetch(`http://localhost:${port}/health`);
+  describe('webhook route', () => {
+    it('responds to POST on /github/webhook', async () => {
+      const res = await sendWebhook(port, {
+        event: 'ping',
+        secret: SECRET,
+        payload: { zen: 'test', repository: { full_name: 'a/b' } },
+      });
       expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body).toEqual({ status: 'ok', channel: 'github' });
     });
   });
 
@@ -771,23 +796,265 @@ describe('GitHubChannel', () => {
   });
 });
 
-// --- Sender allowlist tests (separate describe with its own channel) ---
+// --- extractAuthor ---
 
-describe('GitHubChannel sender allowlist', () => {
+describe('extractAuthor', () => {
+  it('returns PR author for pull_request events', () => {
+    expect(
+      extractAuthor('pull_request', {
+        pull_request: { user: { login: 'seb-writes-code' } },
+      }),
+    ).toBe('seb-writes-code');
+  });
+
+  it('returns PR author for pull_request_review events', () => {
+    expect(
+      extractAuthor('pull_request_review', {
+        pull_request: { user: { login: 'alice' } },
+      }),
+    ).toBe('alice');
+  });
+
+  it('returns PR author for pull_request_review_comment events', () => {
+    expect(
+      extractAuthor('pull_request_review_comment', {
+        pull_request: { user: { login: 'bob' } },
+      }),
+    ).toBe('bob');
+  });
+
+  it('returns issue author for issues events', () => {
+    expect(
+      extractAuthor('issues', { issue: { user: { login: 'alice' } } }),
+    ).toBe('alice');
+  });
+
+  it('returns issue author for issue_comment events', () => {
+    expect(
+      extractAuthor('issue_comment', { issue: { user: { login: 'bob' } } }),
+    ).toBe('bob');
+  });
+
+  it('returns head_commit author for check_suite events', () => {
+    expect(
+      extractAuthor('check_suite', {
+        check_suite: {
+          head_commit: { author: { login: 'seb-writes-code' } },
+        },
+      }),
+    ).toBe('seb-writes-code');
+  });
+
+  it('falls back to committer for check_suite events', () => {
+    expect(
+      extractAuthor('check_suite', {
+        check_suite: {
+          head_commit: { committer: { login: 'seb-writes-code' } },
+        },
+      }),
+    ).toBe('seb-writes-code');
+  });
+
+  it('returns null for check_suite without head_commit', () => {
+    expect(extractAuthor('check_suite', { check_suite: {} })).toBeNull();
+  });
+
+  it('returns null for unknown events', () => {
+    expect(extractAuthor('push', {})).toBeNull();
+  });
+});
+
+// --- Bot-authored PR trigger bypass ---
+
+describe('GitHubChannel bot username bypass', () => {
   const SECRET = 'test-webhook-secret';
   let port: number;
+  let server: http.Server;
   let channel: GitHubChannel;
   let opts: ChannelOpts;
 
   afterEach(async () => {
     await channel.disconnect();
+    server.close();
+  });
+
+  it('registers bot-authored PR with requiresTrigger false and botUsername trigger', async () => {
+    opts = createTestOpts();
+    channel = new GitHubChannel(
+      SECRET,
+      'test-token',
+      [],
+      opts,
+      'seb-writes-code',
+    );
+    await channel.connect();
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
+
+    await sendWebhook(port, {
+      event: 'pull_request',
+      secret: SECRET,
+      payload: {
+        action: 'opened',
+        repository: { full_name: 'cmraible/seb' },
+        pull_request: {
+          number: 10,
+          title: 'Bot PR',
+          html_url: 'https://github.com/cmraible/seb/pull/10',
+          merged: false,
+          user: { login: 'seb-writes-code' },
+        },
+        sender: { login: 'seb-writes-code' },
+      },
+    });
+
+    expect(opts.registerGroup).toHaveBeenCalledWith(
+      'gh:cmraible/seb#10',
+      expect.objectContaining({
+        trigger: '@seb-writes-code',
+        requiresTrigger: false,
+      }),
+    );
+  });
+
+  it('registers non-bot PR with requiresTrigger false (auto-review)', async () => {
+    opts = createTestOpts();
+    channel = new GitHubChannel(
+      SECRET,
+      'test-token',
+      [],
+      opts,
+      'seb-writes-code',
+    );
+    await channel.connect();
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
+
+    await sendWebhook(port, {
+      event: 'pull_request',
+      secret: SECRET,
+      payload: {
+        action: 'opened',
+        repository: { full_name: 'cmraible/seb' },
+        pull_request: {
+          number: 11,
+          title: 'Someone else PR',
+          html_url: 'https://github.com/cmraible/seb/pull/11',
+          merged: false,
+          user: { login: 'alice' },
+        },
+        sender: { login: 'alice' },
+      },
+    });
+
+    expect(opts.registerGroup).toHaveBeenCalledWith(
+      'gh:cmraible/seb#11',
+      expect.objectContaining({
+        requiresTrigger: false,
+      }),
+    );
+  });
+
+  it('bypasses trigger for bot-authored PR on issue_comment events', async () => {
+    opts = createTestOpts();
+    channel = new GitHubChannel(
+      SECRET,
+      'test-token',
+      [],
+      opts,
+      'seb-writes-code',
+    );
+    await channel.connect();
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
+
+    await sendWebhook(port, {
+      event: 'issue_comment',
+      secret: SECRET,
+      payload: {
+        action: 'created',
+        repository: { full_name: 'cmraible/seb' },
+        issue: {
+          number: 10,
+          title: 'Bot PR',
+          pull_request: { url: 'https://api.github.com/...' },
+          user: { login: 'seb-writes-code' },
+        },
+        comment: {
+          user: { login: 'chris' },
+          body: 'CI failed, can you fix it?',
+          html_url: 'https://github.com/cmraible/seb/pull/10#issuecomment-1',
+        },
+        sender: { login: 'chris' },
+      },
+    });
+
+    expect(opts.registerGroup).toHaveBeenCalledWith(
+      'gh:cmraible/seb#10',
+      expect.objectContaining({
+        requiresTrigger: false,
+      }),
+    );
+  });
+
+  it('skips trigger for PRs even when botUsername is not set', async () => {
+    opts = createTestOpts();
+    channel = new GitHubChannel(SECRET, 'test-token', [], opts);
+    await channel.connect();
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
+
+    await sendWebhook(port, {
+      event: 'pull_request',
+      secret: SECRET,
+      payload: {
+        action: 'opened',
+        repository: { full_name: 'cmraible/seb' },
+        pull_request: {
+          number: 12,
+          title: 'Some PR',
+          html_url: 'https://github.com/cmraible/seb/pull/12',
+          merged: false,
+          user: { login: 'seb-writes-code' },
+        },
+        sender: { login: 'seb-writes-code' },
+      },
+    });
+
+    expect(opts.registerGroup).toHaveBeenCalledWith(
+      'gh:cmraible/seb#12',
+      expect.objectContaining({
+        requiresTrigger: false,
+      }),
+    );
+  });
+});
+
+// --- Sender allowlist tests (separate describe with its own channel) ---
+
+describe('GitHubChannel sender allowlist', () => {
+  const SECRET = 'test-webhook-secret';
+  let port: number;
+  let server: http.Server;
+  let channel: GitHubChannel;
+  let opts: ChannelOpts;
+
+  afterEach(async () => {
+    await channel.disconnect();
+    server.close();
   });
 
   it('delivers events from allowed senders', async () => {
     opts = createTestOpts();
-    channel = new GitHubChannel(SECRET, 0, 'test-token', ['alice'], opts);
+    channel = new GitHubChannel(SECRET, 'test-token', ['alice'], opts);
     await channel.connect();
-    port = (channel as any).server.address().port;
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
 
     await sendWebhook(port, {
       event: 'issues',
@@ -809,9 +1076,11 @@ describe('GitHubChannel sender allowlist', () => {
 
   it('drops events from non-allowed senders', async () => {
     opts = createTestOpts();
-    channel = new GitHubChannel(SECRET, 0, 'test-token', ['alice'], opts);
+    channel = new GitHubChannel(SECRET, 'test-token', ['alice'], opts);
     await channel.connect();
-    port = (channel as any).server.address().port;
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
 
     await sendWebhook(port, {
       event: 'issues',
@@ -834,9 +1103,11 @@ describe('GitHubChannel sender allowlist', () => {
 
   it('allows all senders when allowlist is empty', async () => {
     opts = createTestOpts();
-    channel = new GitHubChannel(SECRET, 0, 'test-token', [], opts);
+    channel = new GitHubChannel(SECRET, 'test-token', [], opts);
     await channel.connect();
-    port = (channel as any).server.address().port;
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
 
     await sendWebhook(port, {
       event: 'issues',
@@ -856,17 +1127,76 @@ describe('GitHubChannel sender allowlist', () => {
     expect(opts.onMessage).toHaveBeenCalled();
   });
 
-  it('supports multiple allowed senders', async () => {
+  it('delivers check_suite events even from non-allowed senders', async () => {
+    opts = createTestOpts();
+    channel = new GitHubChannel(SECRET, 'test-token', ['alice'], opts);
+    await channel.connect();
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
+
+    await sendWebhook(port, {
+      event: 'check_suite',
+      secret: SECRET,
+      payload: {
+        action: 'completed',
+        repository: { full_name: 'cmraible/seb' },
+        check_suite: {
+          conclusion: 'failure',
+          head_branch: 'feat/test',
+          url: 'https://api.github.com/repos/cmraible/seb/check-suites/1',
+          pull_requests: [{ number: 10 }],
+        },
+        sender: { login: 'github-actions[bot]' },
+      },
+    });
+
+    expect(opts.onMessage).toHaveBeenCalled();
+  });
+
+  it('delivers events from the bot username even when not in allowlist', async () => {
     opts = createTestOpts();
     channel = new GitHubChannel(
       SECRET,
-      0,
       'test-token',
-      ['alice', 'bob'],
+      ['alice'],
       opts,
+      'my-bot',
     );
     await channel.connect();
-    port = (channel as any).server.address().port;
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
+
+    await sendWebhook(port, {
+      event: 'pull_request',
+      secret: SECRET,
+      payload: {
+        action: 'opened',
+        repository: { full_name: 'cmraible/seb' },
+        pull_request: {
+          number: 42,
+          title: 'Auto-fix',
+          html_url: 'https://github.com/cmraible/seb/pull/42',
+          user: { login: 'my-bot' },
+          head: { ref: 'fix/auto' },
+          base: { ref: 'main' },
+          body: '',
+        },
+        sender: { login: 'my-bot' },
+      },
+    });
+
+    expect(opts.onMessage).toHaveBeenCalled();
+  });
+
+  it('supports multiple allowed senders', async () => {
+    opts = createTestOpts();
+    channel = new GitHubChannel(SECRET, 'test-token', ['alice', 'bob'], opts);
+    await channel.connect();
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
 
     await sendWebhook(port, {
       event: 'issues',
@@ -884,5 +1214,165 @@ describe('GitHubChannel sender allowlist', () => {
     });
 
     expect(opts.onMessage).toHaveBeenCalled();
+  });
+});
+
+// --- ack and metadata tests ---
+
+describe('GitHubChannel ack', () => {
+  const SECRET = 'test-webhook-secret';
+  let port: number;
+  let server: http.Server;
+  let channel: GitHubChannel;
+  let opts: ChannelOpts;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    opts = createTestOpts();
+    channel = new GitHubChannel(SECRET, 'test-github-token', [], opts);
+    await channel.connect();
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
+  });
+
+  afterEach(async () => {
+    await channel.disconnect();
+    server.close();
+  });
+
+  it('issue_comment webhook includes metadata with comment ID', async () => {
+    await sendWebhook(port, {
+      event: 'issue_comment',
+      secret: SECRET,
+      payload: {
+        action: 'created',
+        repository: { full_name: 'cmraible/seb' },
+        issue: {
+          number: 42,
+          title: 'Test issue',
+          html_url: 'https://github.com/cmraible/seb/issues/42',
+        },
+        comment: {
+          id: 12345,
+          body: 'Hello @Andy',
+          user: { login: 'chris' },
+          html_url:
+            'https://github.com/cmraible/seb/issues/42#issuecomment-12345',
+        },
+        sender: { login: 'chris' },
+      },
+    });
+
+    expect(opts.onMessage).toHaveBeenCalledWith(
+      'gh:cmraible/seb#42',
+      expect.objectContaining({
+        metadata: {
+          github_repo: 'cmraible/seb',
+          github_comment_id: '12345',
+          github_endpoint: 'issues',
+        },
+      }),
+    );
+  });
+
+  it('pull_request_review_comment includes metadata with pulls endpoint', async () => {
+    await sendWebhook(port, {
+      event: 'pull_request_review_comment',
+      secret: SECRET,
+      payload: {
+        action: 'created',
+        repository: { full_name: 'cmraible/seb' },
+        pull_request: {
+          number: 99,
+          title: 'Test PR',
+          user: { login: 'chris' },
+        },
+        comment: {
+          id: 67890,
+          body: 'Review comment',
+          user: { login: 'chris' },
+          html_url: 'https://github.com/cmraible/seb/pull/99#discussion_r67890',
+        },
+        sender: { login: 'chris' },
+      },
+    });
+
+    expect(opts.onMessage).toHaveBeenCalledWith(
+      'gh:cmraible/seb#99',
+      expect.objectContaining({
+        metadata: {
+          github_repo: 'cmraible/seb',
+          github_comment_id: '67890',
+          github_endpoint: 'pulls',
+        },
+      }),
+    );
+  });
+
+  it('ack() calls GitHub Reactions API with eyes emoji', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('{}', { status: 201 }));
+
+    await channel.ack('gh:cmraible/seb#42', {
+      github_repo: 'cmraible/seb',
+      github_comment_id: '12345',
+      github_endpoint: 'issues',
+    });
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'https://api.github.com/repos/cmraible/seb/issues/comments/12345/reactions',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ content: 'eyes' }),
+      }),
+    );
+    fetchSpy.mockRestore();
+  });
+
+  it('ack() uses pulls endpoint for PR review comments', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('{}', { status: 201 }));
+
+    await channel.ack('gh:cmraible/seb#99', {
+      github_repo: 'cmraible/seb',
+      github_comment_id: '67890',
+      github_endpoint: 'pulls',
+    });
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'https://api.github.com/repos/cmraible/seb/pulls/comments/67890/reactions',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ content: 'eyes' }),
+      }),
+    );
+    fetchSpy.mockRestore();
+  });
+
+  it('ack() does nothing without context', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    await channel.ack('gh:cmraible/seb#42');
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it('ack() does nothing without token', async () => {
+    const noTokenOpts = createTestOpts();
+    const noTokenChannel = new GitHubChannel(SECRET, '', [], noTokenOpts);
+    await noTokenChannel.connect();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+    await noTokenChannel.ack('gh:cmraible/seb#42', {
+      github_repo: 'cmraible/seb',
+      github_comment_id: '12345',
+      github_endpoint: 'issues',
+    });
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+    await noTokenChannel.disconnect();
   });
 });
