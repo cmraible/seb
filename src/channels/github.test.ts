@@ -878,7 +878,7 @@ describe('GitHubChannel bot username bypass', () => {
     server.close();
   });
 
-  it('registers bot-authored PR with requiresTrigger false', async () => {
+  it('registers bot-authored PR with requiresTrigger false and botUsername trigger', async () => {
     opts = createTestOpts();
     channel = new GitHubChannel(
       SECRET,
@@ -912,12 +912,13 @@ describe('GitHubChannel bot username bypass', () => {
     expect(opts.registerGroup).toHaveBeenCalledWith(
       'gh:cmraible/seb#10',
       expect.objectContaining({
+        trigger: '@seb-writes-code',
         requiresTrigger: false,
       }),
     );
   });
 
-  it('registers non-bot PR with requiresTrigger true', async () => {
+  it('registers non-bot PR with requiresTrigger false (auto-review)', async () => {
     opts = createTestOpts();
     channel = new GitHubChannel(
       SECRET,
@@ -951,7 +952,7 @@ describe('GitHubChannel bot username bypass', () => {
     expect(opts.registerGroup).toHaveBeenCalledWith(
       'gh:cmraible/seb#11',
       expect.objectContaining({
-        requiresTrigger: true,
+        requiresTrigger: false,
       }),
     );
   });
@@ -999,7 +1000,7 @@ describe('GitHubChannel bot username bypass', () => {
     );
   });
 
-  it('requires trigger when botUsername is not set', async () => {
+  it('skips trigger for PRs even when botUsername is not set', async () => {
     opts = createTestOpts();
     channel = new GitHubChannel(SECRET, 'test-token', [], opts);
     await channel.connect();
@@ -1027,7 +1028,7 @@ describe('GitHubChannel bot username bypass', () => {
     expect(opts.registerGroup).toHaveBeenCalledWith(
       'gh:cmraible/seb#12',
       expect.objectContaining({
-        requiresTrigger: true,
+        requiresTrigger: false,
       }),
     );
   });
@@ -1147,6 +1148,42 @@ describe('GitHubChannel sender allowlist', () => {
           pull_requests: [{ number: 10 }],
         },
         sender: { login: 'github-actions[bot]' },
+      },
+    });
+
+    expect(opts.onMessage).toHaveBeenCalled();
+  });
+
+  it('delivers events from the bot username even when not in allowlist', async () => {
+    opts = createTestOpts();
+    channel = new GitHubChannel(
+      SECRET,
+      'test-token',
+      ['alice'],
+      opts,
+      'my-bot',
+    );
+    await channel.connect();
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
+
+    await sendWebhook(port, {
+      event: 'pull_request',
+      secret: SECRET,
+      payload: {
+        action: 'opened',
+        repository: { full_name: 'cmraible/seb' },
+        pull_request: {
+          number: 42,
+          title: 'Auto-fix',
+          html_url: 'https://github.com/cmraible/seb/pull/42',
+          user: { login: 'my-bot' },
+          head: { ref: 'fix/auto' },
+          base: { ref: 'main' },
+          body: '',
+        },
+        sender: { login: 'my-bot' },
       },
     });
 

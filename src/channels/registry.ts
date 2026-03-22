@@ -19,6 +19,7 @@ export interface ChannelOpts {
   resumeTask?: (taskId: string) => void;
   /** Shared Express app for webhook channels to mount routes on */
   app?: Application;
+  requestRestart?: () => void;
 }
 
 export type ChannelFactory = (opts: ChannelOpts) => Channel | null;

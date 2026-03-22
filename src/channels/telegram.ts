@@ -31,6 +31,7 @@ export interface TelegramChannelOpts {
   cancelTask?: (taskId: string) => void;
   pauseTask?: (taskId: string) => void;
   resumeTask?: (taskId: string) => void;
+  requestRestart?: () => void;
 }
 
 export class TelegramChannel implements Channel {
@@ -68,6 +69,32 @@ export class TelegramChannel implements Channel {
     // Command to check bot status
     this.bot.command('ping', (ctx) => {
       ctx.reply(`${ASSISTANT_NAME} is online.`);
+    });
+
+    // Command to restart the bot process
+    this.bot.command('restart', async (ctx) => {
+      const topicId = (ctx.message as any)?.message_thread_id;
+      const chatJid = topicId
+        ? `tg:${ctx.chat.id}:${topicId}`
+        : `tg:${ctx.chat.id}`;
+      const group = this.opts.registeredGroups()[chatJid];
+
+      if (!group?.isMain) {
+        await ctx.reply('⚠️ /restart is only available in the main group.');
+        return;
+      }
+
+      if (!this.opts.requestRestart) {
+        await ctx.reply('Restart is not available.');
+        return;
+      }
+
+      logger.info(
+        { requestedBy: ctx.from?.username || ctx.from?.id },
+        'Restart requested via /restart command',
+      );
+      await ctx.reply('Restarting NanoClaw...');
+      this.opts.requestRestart();
     });
 
     // Command to list and manage scheduled tasks
@@ -538,5 +565,6 @@ registerChannel('telegram', (opts: ChannelOpts) => {
     cancelTask: opts.cancelTask,
     pauseTask: opts.pauseTask,
     resumeTask: opts.resumeTask,
+    requestRestart: opts.requestRestart,
   });
 });

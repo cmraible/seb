@@ -670,6 +670,7 @@ async function main(): Promise<void> {
     cancelTask: (taskId: string) => deleteTask(taskId),
     pauseTask: (taskId: string) => updateTask(taskId, { status: 'paused' }),
     resumeTask: (taskId: string) => updateTask(taskId, { status: 'active' }),
+    requestRestart: () => shutdown('RESTART'),
   };
 
   // Create and connect all registered channels.
