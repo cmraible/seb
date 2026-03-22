@@ -282,6 +282,8 @@ export class LinearChannel implements Channel {
   private botUserId: string;
   /** If set, only process events from these Linear team keys */
   private allowedTeams: Set<string> | null;
+  /** Map from chatJid to active agent session ID */
+  private activeAgentSessions = new Map<string, string>();
 
   constructor(
     webhookSecret: string,
@@ -571,6 +573,7 @@ export class LinearChannel implements Channel {
     if (type === 'AgentSessionEvent' && action === 'created') {
       const sessionId = data.agentSession?.id;
       if (sessionId) {
+        this.activeAgentSessions.set(chatJid, sessionId);
         this.acknowledgeAgentSession(sessionId).catch((err) =>
           logger.error(
             { err, sessionId },
@@ -667,6 +670,58 @@ export class LinearChannel implements Channel {
   }
 
   /**
+   * Post a response activity to a Linear agent session.
+   */
+  private async postAgentActivity(
+    sessionId: string,
+    token: string,
+    body: string,
+  ): Promise<void> {
+    const mutation = `
+      mutation AgentActivityCreate($input: AgentActivityCreateInput!) {
+        agentActivityCreate(input: $input) {
+          success
+        }
+      }
+    `;
+
+    const res = await fetch('https://api.linear.app/graphql', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        query: mutation,
+        variables: {
+          input: {
+            agentSessionId: sessionId,
+            content: {
+              type: 'response',
+              body,
+            },
+          },
+        },
+      }),
+    });
+
+    if (!res.ok) {
+      const respBody = await res.text();
+      if (res.status === 401) this.accessToken = null;
+      throw new Error(
+        `Linear API error posting agent activity (${res.status}): ${respBody}`,
+      );
+    }
+
+    const result = (await res.json()) as any;
+    if (result.errors) {
+      throw new Error(
+        `Linear GraphQL errors: ${JSON.stringify(result.errors)}`,
+      );
+    }
+  }
+
+  /**
    * Handle the OAuth callback: exchange code for token, fetch viewer ID,
    * persist both, and update the in-memory state.
    */
@@ -696,7 +751,6 @@ export class LinearChannel implements Channel {
   }
 
   async sendMessage(jid: string, text: string): Promise<void> {
-    // Parse JID: linear:ENG-123
     const match = jid.match(/^linear:(.+)$/);
     if (!match) {
       logger.error({ jid }, 'Invalid Linear JID format');
@@ -707,15 +761,35 @@ export class LinearChannel implements Channel {
     if (!token) {
       logger.warn(
         { jid },
-        'Linear OAuth credentials not configured — cannot post comment to Linear',
+        'Linear OAuth credentials not configured — cannot post to Linear',
       );
       return;
     }
 
     const identifier = match[1];
 
-    // Use Linear GraphQL API to post a comment
-    // First, look up the issue ID by identifier
+    // Check for active agent session — respond via session activity instead of comment
+    const sessionId = this.activeAgentSessions.get(jid);
+    if (sessionId) {
+      try {
+        await this.postAgentActivity(sessionId, token, text);
+        this.activeAgentSessions.delete(jid);
+        logger.info(
+          { jid, identifier, sessionId, length: text.length },
+          'Linear agent session response posted',
+        );
+        return;
+      } catch (err) {
+        logger.error(
+          { jid, identifier, sessionId, err },
+          'Failed to post agent session response, falling back to comment',
+        );
+        this.activeAgentSessions.delete(jid);
+        // Fall through to comment
+      }
+    }
+
+    // Fall back to regular comment
     try {
       const issueId = await this.resolveIssueId(identifier, token);
       if (!issueId) {
@@ -754,7 +828,6 @@ export class LinearChannel implements Channel {
 
       if (!res.ok) {
         const body = await res.text();
-        // If unauthorized, clear cached token so next call re-fetches
         if (res.status === 401) this.accessToken = null;
         logger.error(
           { identifier, status: res.status, body },
