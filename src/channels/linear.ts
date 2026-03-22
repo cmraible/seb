@@ -493,7 +493,9 @@ export class LinearChannel implements Channel {
       const registered = this.opts.registeredGroups();
       const assigneeId = issueData?.assignee?.id;
       const delegateId = issueData?.delegate?.id;
-      const isAssignedToBot = !!this.botUserId && (assigneeId === this.botUserId || delegateId === this.botUserId);
+      const isAssignedToBot =
+        !!this.botUserId &&
+        (assigneeId === this.botUserId || delegateId === this.botUserId);
       // Delegation via AgentSessionEvent always means the bot should auto-respond
       const isDelegation = type === 'AgentSessionEvent';
       const skipTrigger = isDelegation || isAssignedToBot;
@@ -591,7 +593,10 @@ export class LinearChannel implements Channel {
 
     // For AgentSessionEvent, include promptContext for the container agent
     if (type === 'AgentSessionEvent') {
-      const promptContext = payload.promptContext || payload.agentSession?.promptContext || data.agentSession?.promptContext;
+      const promptContext =
+        payload.promptContext ||
+        payload.agentSession?.promptContext ||
+        data.agentSession?.promptContext;
       if (promptContext) {
         formatted.text += `\n\n<linear-context>\n${promptContext}\n</linear-context>`;
       }
