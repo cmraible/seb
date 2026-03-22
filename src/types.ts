@@ -42,6 +42,7 @@ export interface RegisteredGroup {
   requiresTrigger?: boolean; // Default: true for groups, false for solo chats
   isMain?: boolean; // True for the main control group (no trigger, elevated privileges)
   metadata?: Record<string, string>; // Channel-specific context (e.g. GitHub type/title)
+  allowedMcpServers?: string[]; // If set, only these MCP servers are available to the group's agent
 }
 
 export interface NewMessage {
