@@ -148,6 +148,7 @@ export async function fetchLinearOAuthToken(
       grant_type: 'client_credentials',
       client_id: clientId,
       client_secret: clientSecret,
+      scope: 'read,write',
     }).toString(),
   });
   if (!res.ok) {
