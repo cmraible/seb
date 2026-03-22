@@ -411,10 +411,12 @@ export class GitHubChannel implements Channel {
         const metadata: Record<string, string> = { type: groupType };
         if (title) metadata.title = title;
 
-        // Skip trigger for PRs/issues opened by the bot itself.
-        // For check_suite events, extractAuthor returns null — use the API result.
+        // PRs skip trigger so the agent processes all events autonomously
+        // (auto-review on open/update, CI fix on check_suite, etc.).
+        // Issues require a trigger unless opened/assigned to the bot.
         const author = extractAuthor(event, payload) || prAuthorFromApi;
         const isBotAuthor = !!this.botUsername && author === this.botUsername;
+        const skipTrigger = groupType === 'pull_request' || isBotAuthor;
         this.opts.registerGroup(chatJid, {
           name: chatName,
           folder,
@@ -422,7 +424,7 @@ export class GitHubChannel implements Channel {
             ? `@${this.botUsername}`
             : `@${ASSISTANT_NAME}`,
           added_at: timestamp,
-          requiresTrigger: !isBotAuthor,
+          requiresTrigger: !skipTrigger,
           metadata,
         });
         logger.info(
