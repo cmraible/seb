@@ -794,7 +794,11 @@ export class LinearChannel implements Channel {
     // Build content based on type
     let content: Record<string, string>;
     if (type === 'action') {
-      content = { type: 'action', action: action || body, parameter: parameter || action || body };
+      content = {
+        type: 'action',
+        action: action || body,
+        parameter: parameter || action || body,
+      };
       if (body && body !== action) content.result = body;
     } else {
       content = { type, body };
@@ -969,7 +973,12 @@ export class LinearChannel implements Channel {
         // If the activity type failed, retry as a simple response (most reliable type)
         if (activity.type !== 'response') {
           try {
-            await this.postAgentActivity(sessionId, token, activity.content, 'response');
+            await this.postAgentActivity(
+              sessionId,
+              token,
+              activity.content,
+              'response',
+            );
             logger.info(
               { jid, identifier, sessionId, length: text.length },
               'Linear agent session activity posted (fallback to response)',
