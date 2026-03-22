@@ -210,7 +210,9 @@ async function runTask(
             typeof streamedOutput.result === 'string'
               ? streamedOutput.result
               : JSON.stringify(streamedOutput.result);
-          const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+          const text = raw
+            .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+            .trim();
           if (text) {
             await deps.sendMessage(task.chat_jid, text);
           }
