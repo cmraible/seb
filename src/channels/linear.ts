@@ -617,11 +617,18 @@ export class LinearChannel implements Channel {
       }
     }
 
-    // For AgentSessionEvent, acknowledge immediately by emitting a "thought" activity
-    if (type === 'AgentSessionEvent' && action === 'created') {
+    // For any AgentSessionEvent, ensure the session is tracked
+    if (type === 'AgentSessionEvent') {
       const sessionId = data.agentSession?.id;
       if (sessionId) {
         this.activeAgentSessions.set(chatJid, sessionId);
+      }
+    }
+
+    // For new agent sessions, acknowledge immediately by emitting a "thought" activity
+    if (type === 'AgentSessionEvent' && action === 'created') {
+      const sessionId = data.agentSession?.id;
+      if (sessionId) {
         this.acknowledgeAgentSession(sessionId).catch((err) =>
           logger.error(
             { err, sessionId },
@@ -950,10 +957,9 @@ export class LinearChannel implements Channel {
           activity.action,
           activity.parameter,
         );
-        // Only clear session on 'response' (final) or 'error' activities
-        if (activity.type === 'response' || activity.type === 'error') {
-          this.activeAgentSessions.delete(jid);
-        }
+        // Don't clear the session after a response — the agent session
+        // remains active in Linear and the user may reply within it.
+        // The session is only cleared on unrecoverable errors (below).
         logger.info(
           {
             jid,
