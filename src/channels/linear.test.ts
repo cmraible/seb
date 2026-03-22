@@ -1,4 +1,6 @@
 import crypto from 'crypto';
+import express from 'express';
+import http from 'http';
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 
 // --- Mocks ---
@@ -26,8 +28,26 @@ import { ChannelOpts } from './registry.js';
 
 // --- Test helpers ---
 
+function createApp(): express.Application {
+  return express();
+}
+
+function startServer(
+  app: express.Application,
+): Promise<{ server: http.Server; port: number }> {
+  return new Promise((resolve, reject) => {
+    const server = app.listen(0, () => {
+      const addr = server.address() as import('net').AddressInfo;
+      resolve({ server, port: addr.port });
+    });
+    server.on('error', reject);
+  });
+}
+
 function createTestOpts(overrides?: Partial<ChannelOpts>): ChannelOpts {
+  const app = createApp();
   return {
+    app,
     onMessage: vi.fn(),
     onChatMetadata: vi.fn(),
     registeredGroups: vi.fn(() => ({})),
@@ -58,7 +78,7 @@ async function sendLinearWebhook(
   if (!opts.skipSignature) {
     headers['Linear-Signature'] = signLinear(opts.secret, body);
   }
-  return fetch(`http://localhost:${port}/webhook`, {
+  return fetch(`http://localhost:${port}/linear/webhook`, {
     method: 'POST',
     headers,
     body,
@@ -128,6 +148,7 @@ describe('verifyLinearSignature', () => {
 describe('LinearChannel', () => {
   const SECRET = 'test-webhook-secret';
   let port: number;
+  let server: http.Server;
   let channel: LinearChannel;
   let opts: ChannelOpts;
 
@@ -135,21 +156,38 @@ describe('LinearChannel', () => {
     if (channel?.isConnected()) {
       await channel.disconnect();
     }
+    if (server) server.close();
   });
 
   describe('webhook server', () => {
     beforeEach(async () => {
       opts = createTestOpts();
-      channel = new LinearChannel(SECRET, 0, 'test-api-key', '', opts);
+      channel = new LinearChannel(
+        SECRET,
+        'test-client-id',
+        'test-client-secret',
+        '',
+        opts,
+      );
       await channel.connect();
-      port = (channel as any).server.address().port;
+      const result = await startServer(opts.app!);
+      server = result.server;
+      port = result.port;
     });
 
-    it('starts and responds to health check', async () => {
-      const res = await fetch(`http://localhost:${port}/health`);
+    it('responds to webhook POST', async () => {
+      const payload = {
+        type: 'Issue',
+        action: 'create',
+        data: {
+          identifier: 'ENG-1',
+          title: 'Test',
+          url: 'https://linear.app/test/issue/ENG-1',
+        },
+        actor: { id: 'user-1', name: 'Chris' },
+      };
+      const res = await sendLinearWebhook(port, { payload, secret: SECRET });
       expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body).toEqual({ status: 'ok', channel: 'linear' });
     });
 
     it('rejects requests without signature', async () => {
@@ -167,7 +205,7 @@ describe('LinearChannel', () => {
         action: 'create',
         data: {},
       });
-      const res = await fetch(`http://localhost:${port}/webhook`, {
+      const res = await fetch(`http://localhost:${port}/linear/webhook`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -276,9 +314,17 @@ describe('LinearChannel', () => {
   describe('auto-registration', () => {
     beforeEach(async () => {
       opts = createTestOpts();
-      channel = new LinearChannel(SECRET, 0, 'test-api-key', '', opts);
+      channel = new LinearChannel(
+        SECRET,
+        'test-client-id',
+        'test-client-secret',
+        '',
+        opts,
+      );
       await channel.connect();
-      port = (channel as any).server.address().port;
+      const result = await startServer(opts.app!);
+      server = result.server;
+      port = result.port;
     });
 
     it('auto-registers a group for new issues', async () => {
@@ -316,9 +362,19 @@ describe('LinearChannel', () => {
     it('sets requiresTrigger=false when assigned to bot', async () => {
       const botUserId = 'bot-user-123';
       await channel.disconnect();
-      channel = new LinearChannel(SECRET, 0, 'test-api-key', botUserId, opts);
+      server.close();
+      opts = createTestOpts();
+      channel = new LinearChannel(
+        SECRET,
+        'test-client-id',
+        'test-client-secret',
+        botUserId,
+        opts,
+      );
       await channel.connect();
-      port = (channel as any).server.address().port;
+      const result = await startServer(opts.app!);
+      server = result.server;
+      port = result.port;
 
       const payload = {
         type: 'Issue',
@@ -348,9 +404,17 @@ describe('LinearChannel', () => {
     it('skips events triggered by the bot itself', async () => {
       const botUserId = 'bot-user-123';
       opts = createTestOpts();
-      channel = new LinearChannel(SECRET, 0, 'test-api-key', botUserId, opts);
+      channel = new LinearChannel(
+        SECRET,
+        'test-client-id',
+        'test-client-secret',
+        botUserId,
+        opts,
+      );
       await channel.connect();
-      port = (channel as any).server.address().port;
+      const result = await startServer(opts.app!);
+      server = result.server;
+      port = result.port;
 
       const payload = {
         type: 'Comment',
@@ -372,9 +436,18 @@ describe('LinearChannel', () => {
   describe('team filtering', () => {
     it('skips events from non-allowed teams', async () => {
       opts = createTestOpts();
-      channel = new LinearChannel(SECRET, 0, 'test-api-key', '', opts, ['ENG']);
+      channel = new LinearChannel(
+        SECRET,
+        'test-client-id',
+        'test-client-secret',
+        '',
+        opts,
+        ['ENG'],
+      );
       await channel.connect();
-      port = (channel as any).server.address().port;
+      const result = await startServer(opts.app!);
+      server = result.server;
+      port = result.port;
 
       const payload = {
         type: 'Issue',
@@ -394,9 +467,18 @@ describe('LinearChannel', () => {
 
     it('processes events from allowed teams', async () => {
       opts = createTestOpts();
-      channel = new LinearChannel(SECRET, 0, 'test-api-key', '', opts, ['ENG']);
+      channel = new LinearChannel(
+        SECRET,
+        'test-client-id',
+        'test-client-secret',
+        '',
+        opts,
+        ['ENG'],
+      );
       await channel.connect();
-      port = (channel as any).server.address().port;
+      const result = await startServer(opts.app!);
+      server = result.server;
+      port = result.port;
 
       const payload = {
         type: 'Issue',
@@ -419,7 +501,7 @@ describe('LinearChannel', () => {
   describe('ownsJid', () => {
     beforeEach(() => {
       opts = createTestOpts();
-      channel = new LinearChannel(SECRET, 0, '', '', opts);
+      channel = new LinearChannel(SECRET, '', '', '', opts);
     });
 
     it('returns true for linear: JIDs', () => {
@@ -448,9 +530,17 @@ describe('LinearChannel', () => {
           'linear:ENG-30': existingGroup,
         })),
       });
-      channel = new LinearChannel(SECRET, 0, 'test-api-key', botUserId, opts);
+      channel = new LinearChannel(
+        SECRET,
+        'test-client-id',
+        'test-client-secret',
+        botUserId,
+        opts,
+      );
       await channel.connect();
-      port = (channel as any).server.address().port;
+      const result = await startServer(opts.app!);
+      server = result.server;
+      port = result.port;
 
       const payload = {
         type: 'Issue',

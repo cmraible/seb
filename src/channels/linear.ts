@@ -1,6 +1,5 @@
 import crypto from 'crypto';
 import express from 'express';
-import http from 'http';
 
 import { ASSISTANT_NAME } from '../config.js';
 import { readEnvFile } from '../env.js';
@@ -134,14 +133,43 @@ function formatEvent(
   }
 }
 
+/**
+ * Obtain an OAuth access token using Linear's client credentials grant.
+ * Caches the token for reuse.
+ */
+export async function fetchLinearOAuthToken(
+  clientId: string,
+  clientSecret: string,
+): Promise<string> {
+  const res = await fetch('https://api.linear.app/oauth/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'client_credentials',
+      client_id: clientId,
+      client_secret: clientSecret,
+    }).toString(),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(
+      `Linear OAuth token request failed (${res.status}): ${body}`,
+    );
+  }
+  const data = (await res.json()) as { access_token: string };
+  return data.access_token;
+}
+
 export class LinearChannel implements Channel {
   name = 'linear';
 
-  private server: http.Server | null = null;
+  private connected = false;
   private opts: ChannelOpts;
   private webhookSecret: string;
-  private port: number;
-  private apiKey: string;
+  private clientId: string;
+  private clientSecret: string;
+  /** Cached OAuth access token */
+  private accessToken: string | null = null;
   /** Linear user ID of the bot — issues assigned to this user skip the trigger */
   private botUserId: string;
   /** If set, only process events from these Linear team keys */
@@ -149,34 +177,55 @@ export class LinearChannel implements Channel {
 
   constructor(
     webhookSecret: string,
-    port: number,
-    apiKey: string,
+    clientId: string,
+    clientSecret: string,
     botUserId: string,
     opts: ChannelOpts,
     allowedTeams: string[] = [],
   ) {
     this.webhookSecret = webhookSecret;
-    this.port = port;
-    this.apiKey = apiKey;
+    this.clientId = clientId;
+    this.clientSecret = clientSecret;
     this.botUserId = botUserId;
     this.opts = opts;
     this.allowedTeams = allowedTeams.length > 0 ? new Set(allowedTeams) : null;
   }
 
+  /**
+   * Get a valid Linear API access token, fetching a new one if needed.
+   */
+  private async getAccessToken(): Promise<string | null> {
+    if (!this.clientId || !this.clientSecret) return null;
+    if (this.accessToken) return this.accessToken;
+    try {
+      this.accessToken = await fetchLinearOAuthToken(
+        this.clientId,
+        this.clientSecret,
+      );
+      return this.accessToken;
+    } catch (err) {
+      logger.error({ err }, 'Failed to obtain Linear OAuth token');
+      return null;
+    }
+  }
+
   async connect(): Promise<void> {
-    const app = express();
+    const app = this.opts.app;
+    if (!app) {
+      throw new Error(
+        'Linear channel requires a shared Express app via opts.app',
+      );
+    }
 
-    // Parse raw body for signature verification — need raw string
-    app.use(
-      express.json({
-        limit: '1mb',
-        verify: (req: any, _res, buf) => {
-          req.rawBody = buf.toString('utf-8');
-        },
-      }),
-    );
+    // Mount route-level body parser that captures raw body for signature verification
+    const jsonParser = express.json({
+      limit: '1mb',
+      verify: (req: any, _res, buf) => {
+        req.rawBody = buf.toString('utf-8');
+      },
+    });
 
-    app.post('/webhook', (req, res) => {
+    app.post('/linear/webhook', jsonParser, (req, res) => {
       const signature = req.headers['linear-signature'] as string;
       const deliveryId = req.headers['linear-delivery'] as string;
       const eventType = req.headers['linear-event'] as string;
@@ -217,21 +266,15 @@ export class LinearChannel implements Channel {
       );
     });
 
-    // Health check
-    app.get('/health', (_req, res) => {
-      res.json({ status: 'ok', channel: 'linear' });
-    });
-
-    return new Promise<void>((resolve, reject) => {
-      this.server = app.listen(this.port, () => {
-        logger.info({ port: this.port }, 'Linear webhook server listening');
-        console.log(
-          `\n  Linear webhooks: http://localhost:${this.port}/webhook`,
-        );
-        resolve();
+    // Pre-fetch token on startup if credentials are configured
+    if (this.clientId && this.clientSecret) {
+      this.getAccessToken().catch(() => {
+        /* logged inside getAccessToken */
       });
-      this.server.on('error', reject);
-    });
+    }
+
+    this.connected = true;
+    logger.info('Linear webhook routes mounted on /linear/webhook');
   }
 
   private async processWebhook(
@@ -371,10 +414,11 @@ export class LinearChannel implements Channel {
       return;
     }
 
-    if (!this.apiKey) {
+    const token = await this.getAccessToken();
+    if (!token) {
       logger.warn(
         { jid },
-        'LINEAR_API_KEY not set — cannot post comment to Linear',
+        'Linear OAuth credentials not configured — cannot post comment to Linear',
       );
       return;
     }
@@ -384,7 +428,7 @@ export class LinearChannel implements Channel {
     // Use Linear GraphQL API to post a comment
     // First, look up the issue ID by identifier
     try {
-      const issueId = await this.resolveIssueId(identifier);
+      const issueId = await this.resolveIssueId(identifier, token);
       if (!issueId) {
         logger.warn(
           { identifier },
@@ -405,7 +449,7 @@ export class LinearChannel implements Channel {
       const res = await fetch('https://api.linear.app/graphql', {
         method: 'POST',
         headers: {
-          Authorization: this.apiKey,
+          Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -421,6 +465,8 @@ export class LinearChannel implements Channel {
 
       if (!res.ok) {
         const body = await res.text();
+        // If unauthorized, clear cached token so next call re-fetches
+        if (res.status === 401) this.accessToken = null;
         logger.error(
           { identifier, status: res.status, body },
           'Linear API error posting comment',
@@ -449,7 +495,10 @@ export class LinearChannel implements Channel {
   /**
    * Resolve a Linear issue identifier (e.g., ENG-123) to its UUID.
    */
-  private async resolveIssueId(identifier: string): Promise<string | null> {
+  private async resolveIssueId(
+    identifier: string,
+    token: string,
+  ): Promise<string | null> {
     const query = `
       query IssueByIdentifier($id: String!) {
         issue(id: $id) {
@@ -462,7 +511,7 @@ export class LinearChannel implements Channel {
       const res = await fetch('https://api.linear.app/graphql', {
         method: 'POST',
         headers: {
-          Authorization: this.apiKey,
+          Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -480,7 +529,7 @@ export class LinearChannel implements Channel {
   }
 
   isConnected(): boolean {
-    return this.server !== null && this.server.listening;
+    return this.connected;
   }
 
   ownsJid(jid: string): boolean {
@@ -488,31 +537,25 @@ export class LinearChannel implements Channel {
   }
 
   async disconnect(): Promise<void> {
-    if (this.server) {
-      await new Promise<void>((resolve) => {
-        this.server!.close(() => resolve());
-      });
-      this.server = null;
-      logger.info('Linear webhook server stopped');
-    }
+    this.connected = false;
+    logger.info('Linear channel disconnected');
   }
 }
 
 registerChannel('linear', (opts: ChannelOpts) => {
   const envVars = readEnvFile([
     'LINEAR_WEBHOOK_SECRET',
-    'LINEAR_WEBHOOK_PORT',
-    'LINEAR_API_KEY',
+    'LINEAR_CLIENT_ID',
+    'LINEAR_CLIENT_SECRET',
     'LINEAR_BOT_USER_ID',
     'LINEAR_ALLOWED_TEAMS',
   ]);
   const secret =
     process.env.LINEAR_WEBHOOK_SECRET || envVars.LINEAR_WEBHOOK_SECRET || '';
-  const port = parseInt(
-    process.env.LINEAR_WEBHOOK_PORT || envVars.LINEAR_WEBHOOK_PORT || '0',
-    10,
-  );
-  const apiKey = process.env.LINEAR_API_KEY || envVars.LINEAR_API_KEY || '';
+  const clientId =
+    process.env.LINEAR_CLIENT_ID || envVars.LINEAR_CLIENT_ID || '';
+  const clientSecret =
+    process.env.LINEAR_CLIENT_SECRET || envVars.LINEAR_CLIENT_SECRET || '';
   const botUserId =
     process.env.LINEAR_BOT_USER_ID || envVars.LINEAR_BOT_USER_ID || '';
   const allowedTeamsRaw =
@@ -522,14 +565,14 @@ registerChannel('linear', (opts: ChannelOpts) => {
     .map((s) => s.trim())
     .filter(Boolean);
 
-  if (!secret || !port) {
-    logger.warn('Linear: LINEAR_WEBHOOK_SECRET or LINEAR_WEBHOOK_PORT not set');
+  if (!secret) {
+    logger.warn('Linear: LINEAR_WEBHOOK_SECRET not set');
     return null;
   }
 
-  if (!apiKey) {
+  if (!clientId || !clientSecret) {
     logger.warn(
-      'Linear: LINEAR_API_KEY not set — webhook events will be received but replies will not be posted',
+      'Linear: LINEAR_CLIENT_ID/LINEAR_CLIENT_SECRET not set — webhook events will be received but replies will not be posted',
     );
   }
 
@@ -544,5 +587,12 @@ registerChannel('linear', (opts: ChannelOpts) => {
     logger.info({ allowedTeams }, 'Linear: team allowlist active');
   }
 
-  return new LinearChannel(secret, port, apiKey, botUserId, opts, allowedTeams);
+  return new LinearChannel(
+    secret,
+    clientId,
+    clientSecret,
+    botUserId,
+    opts,
+    allowedTeams,
+  );
 });
