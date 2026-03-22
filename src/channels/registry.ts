@@ -15,6 +15,7 @@ export interface ChannelOpts {
   cancelTask?: (taskId: string) => void;
   pauseTask?: (taskId: string) => void;
   resumeTask?: (taskId: string) => void;
+  requestRestart?: () => void;
 }
 
 export type ChannelFactory = (opts: ChannelOpts) => Channel | null;
