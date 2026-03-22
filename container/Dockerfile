@@ -51,6 +51,9 @@ RUN go install github.com/a-h/templ/cmd/templ@latest && \
     go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest && \
     go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest
 
+# Install Bun runtime
+RUN curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash
+
 # Install Mailpit (email testing server)
 RUN curl -sL https://raw.githubusercontent.com/axllent/mailpit/develop/install.sh | bash
 
