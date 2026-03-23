@@ -33,3 +33,16 @@ jobs:
 
       - name: Tests
         run: npx vitest run
+
+  all-checks-passed:
+    if: always()
+    needs: [gitleaks, ci]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check all jobs
+        run: |
+          if [[ "${{ needs.gitleaks.result }}" != "success" || "${{ needs.ci.result }}" != "success" ]]; then
+            echo "One or more checks failed"
+            exit 1
+          fi
+          echo "All checks passed"

@@ -226,7 +226,17 @@ async function runTask(
               'Suppressing task output — send_message was already called',
             );
           } else {
-            await deps.sendMessage(task.chat_jid, streamedOutput.result);
+            // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
+            const raw =
+              typeof streamedOutput.result === 'string'
+                ? streamedOutput.result
+                : JSON.stringify(streamedOutput.result);
+            const text = raw
+              .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+              .trim();
+            if (text) {
+              await deps.sendMessage(task.chat_jid, text);
+            }
           }
           scheduleClose();
         }

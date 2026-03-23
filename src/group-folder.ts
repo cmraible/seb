@@ -78,6 +78,25 @@ export function writeGroupTemplate(
 
   if (!jid) return;
 
+  // Try Linear first
+  const linearCtx = parseLinearJid(jid);
+  if (linearCtx) {
+    const content = generateLinearClaudeMd({
+      identifier: linearCtx.identifier,
+      title: metadata?.title || '',
+      description: metadata?.description,
+      status: metadata?.status,
+      priority: metadata?.priority,
+      team: metadata?.team,
+      assignee: metadata?.assignee,
+      url: metadata?.url,
+    });
+    if (content) {
+      fs.writeFileSync(targetPath, content, 'utf-8');
+    }
+    return;
+  }
+
   const parsed = parseGitHubJid(jid);
   if (!parsed) return;
 
@@ -209,6 +228,128 @@ You are activated by check_suite events on the main branch. If CI fails on main,
 ## Useful Commands
 - \`gh run list --repo ${ctx.repo} --limit 5\` — check recent CI runs
 - \`gh pr create --repo ${ctx.repo} --title "..." --body "..."\` — raise a fix PR
+`;
+}
+
+// --- Linear support ---
+
+export interface LinearGroupContext {
+  identifier: string;
+  title: string;
+  description?: string;
+  status?: string;
+  priority?: string;
+  team?: string;
+  assignee?: string;
+  url?: string;
+}
+
+/**
+ * Parse a Linear JID into structured context.
+ * JID format: `linear:ENG-123`
+ */
+export function parseLinearJid(jid: string): { identifier: string } | null {
+  const match = jid.match(/^linear:(.+)$/);
+  if (!match) return null;
+  return { identifier: match[1] };
+}
+
+function generateLinearClaudeMd(ctx: LinearGroupContext): string {
+  const titleLine = ctx.title ? ` — ${ctx.title}` : '';
+  const priorityLabel =
+    ctx.priority != null
+      ? {
+          '0': 'No priority',
+          '1': 'Urgent',
+          '2': 'High',
+          '3': 'Medium',
+          '4': 'Low',
+        }[ctx.priority] || `P${ctx.priority}`
+      : undefined;
+
+  const metaLines: string[] = [];
+  if (ctx.status) metaLines.push(`- **Status**: ${ctx.status}`);
+  if (priorityLabel) metaLines.push(`- **Priority**: ${priorityLabel}`);
+  if (ctx.team) metaLines.push(`- **Team**: ${ctx.team}`);
+  if (ctx.assignee) metaLines.push(`- **Assignee**: ${ctx.assignee}`);
+  if (ctx.url) metaLines.push(`- **URL**: ${ctx.url}`);
+
+  const descriptionSection = ctx.description
+    ? `\n## Description\n${ctx.description}\n`
+    : '';
+
+  return `# Linear Issue: ${ctx.identifier}${titleLine}
+
+You are Seb, an AI agent working on a Linear issue. Your job is to actually implement the requested changes, not just acknowledge them.
+
+## This Issue
+- **Issue**: ${ctx.identifier}${titleLine}
+${metaLines.join('\n')}
+${descriptionSection}
+## Agent Activity Protocol
+
+You communicate progress through your output messages. Use these prefixes to emit different activity types in Linear's agent session UI:
+
+- \`[thought] your thinking here\` — Internal reasoning, visible to user as a thought bubble
+- \`[action:ActionName] result\` — Tool/action with optional result (e.g., \`[action:Cloning repo] cmraible/seb\`)
+- \`[error] what went wrong\` — Report an error
+- \`[elicitation] question for user\` — Ask the user a question
+- No prefix → Final response (marks session as complete)
+
+**Important**: Send \`[thought]\` and \`[action]\` messages as you work to keep the user informed. Only send an unprefixed message as your final response when done.
+
+## Workflow
+
+### Step 1: Understand the issue
+Read the issue details and any comments. The issue context from Linear is included in the messages you received.
+
+### Step 2: Find the right repository
+Use the \`gh\` CLI to determine which repo to work in. Common repos:
+- \`cmraible/seb\` — The main NanoClaw/Seb project
+
+If unsure, check the issue description for repo references, or look at related issues.
+
+### Step 3: Clone and branch
+\`\`\`bash
+cd /tmp
+gh repo clone <owner>/<repo> work-repo
+cd work-repo
+git checkout -b <branch-name>
+\`\`\`
+
+Send an \`[action:Cloning repository] owner/repo\` activity.
+
+### Step 4: Implement
+- Read the relevant code to understand the codebase
+- Make the necessary changes
+- Test your changes if possible
+- Send \`[thought]\` activities as you reason through the implementation
+
+### Step 5: Push and create PR
+\`\`\`bash
+git add <files>
+git commit -m "description of changes"
+git push -u origin <branch-name>
+gh pr create --title "..." --body "..."
+\`\`\`
+
+Send an \`[action:Created PR] #123\` activity.
+
+### Step 6: Wrap up
+- Link the PR to the Linear issue
+- Do NOT change the issue status — linking a PR automatically sets it to "In Review", and it will move to "Done" when the PR is merged
+- Send your final response (no prefix) summarizing what you did
+
+## Available Tools
+- \`gh\` CLI — authenticated as seb-writes-code, for cloning repos, creating PRs, etc.
+- \`mcp__linear__*\` — Linear MCP tools for reading/writing issues, comments, status updates
+- Standard tools — file operations, bash, web search, etc.
+
+## Important Notes
+- You have \`LINEAR_ACCESS_TOKEN\` in your environment for API calls
+- You have GitHub access via \`gh\` CLI (authenticated as seb-writes-code)
+- Always create a new branch for your work, never push to main
+- If the issue requires changes you can't make (infrastructure, secrets, etc.), explain what's needed in your final response
 `;
 }
 
