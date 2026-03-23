@@ -73,6 +73,10 @@ You have read-write access to the user's Obsidian vault at `/workspace/extra/obs
 
 When the user asks you to take notes, remember something long-term, or work on the knowledge base, use the vault.
 
+## Project Management
+
+All backlogs are managed in Linear (workspace: chrisraible). Never create GitHub issues or GitHub projects for backlog tracking — always use Linear. Projects in Linear: Seb (nanoclaw), Rebased, sandctl.
+
 ## Pull Requests
 
 When creating a PR on GitHub, always request a review from the repo owner (cmraible) using `gh pr create --reviewer cmraible` or `gh pr edit --add-reviewer cmraible`.
