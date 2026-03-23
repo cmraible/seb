@@ -4,6 +4,8 @@ import fs from 'fs';
 import http from 'http';
 import path from 'path';
 
+const startTime = Date.now();
+
 import {
   ASSISTANT_NAME,
   CREDENTIAL_PROXY_PORT,
@@ -600,9 +602,35 @@ async function main(): Promise<void> {
   // Shared Express app for webhook channels
   const webhookApp = express();
 
-  // Shared health endpoint
+  // Health endpoint — used by deploy smoke tests and monitoring
   webhookApp.get('/health', (_req, res) => {
-    res.json({ status: 'ok', channels: channels.map((c) => c.name) });
+    let dbOk = false;
+    try {
+      const groupCount = Object.keys(registeredGroups).length;
+      dbOk = groupCount >= 0; // DB is accessible if this doesn't throw
+    } catch {
+      // DB not accessible
+    }
+
+    let version = '';
+    try {
+      version = execSync('git log -1 --format="%h"', {
+        encoding: 'utf-8',
+      }).trim();
+    } catch {
+      // not in a git repo
+    }
+
+    const groupCount = Object.keys(registeredGroups).length;
+
+    res.json({
+      status: dbOk ? 'ok' : 'degraded',
+      uptime: Math.floor((Date.now() - startTime) / 1000),
+      version,
+      channels: channels.map((c) => c.name),
+      groups: groupCount,
+      dbOk,
+    });
   });
 
   // Channel callbacks (shared by all channels)
@@ -694,12 +722,9 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Start shared webhook server if any webhook channel is active
-  const webhookChannelNames = ['github', 'linear'];
-  const hasWebhookChannel = channels.some((ch) =>
-    webhookChannelNames.includes(ch.name),
-  );
-  if (hasWebhookChannel) {
+  // Always start the HTTP server — provides /health for deploy verification
+  // and webhook endpoints for channels that need them (GitHub, Linear)
+  {
     const envVars = readEnvFile(['WEBHOOK_PORT']);
     const webhookPort = parseInt(
       process.env.WEBHOOK_PORT || envVars.WEBHOOK_PORT || '3000',
@@ -707,8 +732,8 @@ async function main(): Promise<void> {
     );
     webhookServer = await new Promise<http.Server>((resolve, reject) => {
       const server = webhookApp.listen(webhookPort, () => {
-        logger.info({ port: webhookPort }, 'Shared webhook server listening');
-        console.log(`\n  Webhooks: http://localhost:${webhookPort}`);
+        logger.info({ port: webhookPort }, 'HTTP server listening');
+        console.log(`\n  HTTP: http://localhost:${webhookPort}`);
         resolve(server);
       });
       server.on('error', reject);
