@@ -59,7 +59,7 @@ export const IPC_POLL_INTERVAL = 1000;
 export const IDLE_TIMEOUT = parseIntEnv('IDLE_TIMEOUT', 1800000); // 30min default — how long to keep container alive after last result
 export const MAX_CONCURRENT_CONTAINERS = Math.max(
   1,
-  parseIntEnv('MAX_CONCURRENT_CONTAINERS', 5),
+  parseIntEnv('MAX_CONCURRENT_CONTAINERS', 10),
 );
 
 export function escapeRegex(str: string): string {
