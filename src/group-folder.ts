@@ -359,7 +359,7 @@ Send an \`[action:Created PR] #123\` activity.
 ## Important Notes
 - You have \`LINEAR_ACCESS_TOKEN\` in your environment for API calls
 - You have GitHub access via \`gh\` CLI (authenticated as seb-writes-code)
-- **PRs must always target the upstream repo** (e.g. \`cmraible/seb\`), NOT the fork (\`seb-writes-code/seb\`)
+- **CRITICAL: PRs must target \`cmraible/*\` repos (e.g. \`cmraible/seb\`, \`cmraible/sandctl\`). NEVER open PRs against \`qwibitai/nanoclaw\` or any other upstream.** The \`cmraible/seb\` repo is a fork of \`qwibitai/nanoclaw\`, so \`gh pr create\` without \`--repo\` will incorrectly target \`qwibitai/nanoclaw\`. You MUST always pass \`--repo cmraible/<repo>\`.
 - Always create a new branch for your work, never push to main
 - If the issue requires changes you can't make (infrastructure, secrets, etc.), explain what's needed in your final response
 `;
