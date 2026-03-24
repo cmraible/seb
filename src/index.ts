@@ -303,6 +303,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         }
         // Only reset idle timer on actual results, not session-update markers (result: null)
         resetIdleTimer();
+        // Notify queue this container is idle — allows preemption if other groups are waiting
+        queue.notifyIdle(chatJid);
       }
 
       if (result.status === 'error') {

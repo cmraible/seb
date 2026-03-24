@@ -72,6 +72,15 @@ export class GroupQueue {
     }
 
     if (this.activeCount >= MAX_CONCURRENT_CONTAINERS) {
+      // Try to preempt an idle container from another group
+      const idleJid = this.findIdleContainer(groupJid);
+      if (idleJid) {
+        logger.info(
+          { groupJid, idleJid, activeCount: this.activeCount },
+          'Preempting idle container to make room for message',
+        );
+        this.closeStdin(idleJid);
+      }
       state.pendingMessages = true;
       if (!this.waitingGroups.includes(groupJid)) {
         this.waitingGroups.push(groupJid);
@@ -113,6 +122,15 @@ export class GroupQueue {
     }
 
     if (this.activeCount >= MAX_CONCURRENT_CONTAINERS) {
+      // Try to preempt an idle container from another group
+      const idleJid = this.findIdleContainer(groupJid);
+      if (idleJid) {
+        logger.info(
+          { groupJid, idleJid, activeCount: this.activeCount },
+          'Preempting idle container to make room for task',
+        );
+        this.closeStdin(idleJid);
+      }
       state.pendingTasks.push({ id: taskId, groupJid, fn });
       if (!this.waitingGroups.includes(groupJid)) {
         this.waitingGroups.push(groupJid);
@@ -144,12 +162,19 @@ export class GroupQueue {
 
   /**
    * Mark the container as idle-waiting (finished work, waiting for IPC input).
-   * If tasks are pending, preempt the idle container immediately.
+   * If tasks are pending for this group, or other groups are waiting for a slot,
+   * preempt the idle container immediately.
    */
   notifyIdle(groupJid: string): void {
     const state = this.getGroup(groupJid);
     state.idleWaiting = true;
     if (state.pendingTasks.length > 0) {
+      this.closeStdin(groupJid);
+    } else if (this.waitingGroups.length > 0) {
+      logger.info(
+        { groupJid, waitingCount: this.waitingGroups.length },
+        'Preempting idle container to free slot for waiting groups',
+      );
       this.closeStdin(groupJid);
     }
   }
@@ -180,6 +205,18 @@ export class GroupQueue {
       logger.warn({ groupJid, err }, 'Failed to write IPC message file');
       return false;
     }
+  }
+
+  /**
+   * Find an idle container from a different group that can be preempted.
+   */
+  private findIdleContainer(excludeJid: string): string | null {
+    for (const [jid, state] of this.groups) {
+      if (jid !== excludeJid && state.idleWaiting) {
+        return jid;
+      }
+    }
+    return null;
   }
 
   /**
