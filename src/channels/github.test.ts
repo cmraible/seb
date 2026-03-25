@@ -1294,14 +1294,15 @@ describe('GitHubChannel sender allowlist', () => {
     opts = createTestOpts();
     channel = new GitHubChannel(
       SECRET,
-      0,
       'test-token',
       ['alice'],
       opts,
       'my-bot',
     );
     await channel.connect();
-    port = (channel as any).server.address().port;
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
 
     await sendWebhook(port, {
       event: 'pull_request',

@@ -27,6 +27,7 @@ export interface IpcDeps {
     groupFolder: string,
     isMain: boolean,
     availableGroups: AvailableGroup[],
+    registeredJids: Set<string>,
   ) => void;
   onTasksChanged: () => void;
 }
@@ -454,7 +455,12 @@ export async function processTaskIpc(
         await deps.syncGroups(true);
         // Write updated snapshot immediately
         const availableGroups = deps.getAvailableGroups();
-        deps.writeGroupsSnapshot(sourceGroup, true, availableGroups);
+        deps.writeGroupsSnapshot(
+          sourceGroup,
+          true,
+          availableGroups,
+          new Set(Object.keys(registeredGroups)),
+        );
       } else {
         logger.warn(
           { sourceGroup },
