@@ -377,6 +377,8 @@ export class LinearChannel implements Channel {
   private botUserId: string;
   /** If set, only process events from these Linear team keys */
   private allowedTeams: Set<string> | null;
+  /** If set, auto-launch containers when issues move to these statuses */
+  private statusTriggers: Set<string> | null;
   /** Map from chatJid to active agent session ID — persisted to DB */
   private activeAgentSessions = new Map<string, string>();
 
@@ -387,6 +389,7 @@ export class LinearChannel implements Channel {
     botUserId: string,
     opts: ChannelOpts,
     allowedTeams: string[] = [],
+    statusTriggers: string[] = [],
   ) {
     this.webhookSecret = webhookSecret;
     this.clientId = clientId;
@@ -394,6 +397,8 @@ export class LinearChannel implements Channel {
     this.botUserId = botUserId;
     this.opts = opts;
     this.allowedTeams = allowedTeams.length > 0 ? new Set(allowedTeams) : null;
+    this.statusTriggers =
+      statusTriggers.length > 0 ? new Set(statusTriggers) : null;
 
     // Restore active agent sessions from DB
     this.loadAgentSessions();
@@ -752,6 +757,32 @@ export class LinearChannel implements Channel {
         logger.info(
           { chatJid, isAssignedToBot },
           'Updated Linear group trigger setting',
+        );
+      }
+
+      // Status-triggered auto-launch: when an issue moves to a configured
+      // status, temporarily disable requiresTrigger so the message loop
+      // picks up the status-change message and launches a container.
+      if (
+        this.statusTriggers &&
+        type === 'Issue' &&
+        action === 'update' &&
+        data.state?.name &&
+        this.statusTriggers.has(data.state.name) &&
+        !this.activeAgentSessions.has(chatJid) &&
+        registered[chatJid]?.requiresTrigger !== false
+      ) {
+        this.opts.registerGroup(chatJid, {
+          ...registered[chatJid],
+          requiresTrigger: false,
+          metadata: {
+            ...registered[chatJid].metadata,
+            ...(issueData?.state?.name ? { status: issueData.state.name } : {}),
+          },
+        });
+        logger.info(
+          { chatJid, status: data.state.name },
+          'Status trigger: disabled requiresTrigger for auto-launch',
         );
       }
     }
@@ -1279,6 +1310,7 @@ registerChannel('linear', (opts: ChannelOpts) => {
     'LINEAR_CLIENT_SECRET',
     'LINEAR_BOT_USER_ID',
     'LINEAR_ALLOWED_TEAMS',
+    'LINEAR_STATUS_TRIGGERS',
   ]);
   const secret =
     process.env.LINEAR_WEBHOOK_SECRET || envVars.LINEAR_WEBHOOK_SECRET || '';
@@ -1291,6 +1323,12 @@ registerChannel('linear', (opts: ChannelOpts) => {
   const allowedTeamsRaw =
     process.env.LINEAR_ALLOWED_TEAMS || envVars.LINEAR_ALLOWED_TEAMS || '';
   const allowedTeams = allowedTeamsRaw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const statusTriggersRaw =
+    process.env.LINEAR_STATUS_TRIGGERS || envVars.LINEAR_STATUS_TRIGGERS || '';
+  const statusTriggers = statusTriggersRaw
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
@@ -1317,6 +1355,10 @@ registerChannel('linear', (opts: ChannelOpts) => {
     logger.info({ allowedTeams }, 'Linear: team allowlist active');
   }
 
+  if (statusTriggers.length > 0) {
+    logger.info({ statusTriggers }, 'Linear: status triggers active');
+  }
+
   return new LinearChannel(
     secret,
     clientId,
@@ -1324,5 +1366,6 @@ registerChannel('linear', (opts: ChannelOpts) => {
     botUserId,
     opts,
     allowedTeams,
+    statusTriggers,
   );
 });

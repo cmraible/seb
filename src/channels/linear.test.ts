@@ -870,4 +870,253 @@ describe('LinearChannel', () => {
       );
     });
   });
+
+  describe('status triggers', () => {
+    const SECRET = 'status-trigger-secret';
+    let opts: ChannelOpts;
+    let channel: LinearChannel;
+    let server: http.Server;
+    let port: number;
+
+    afterEach(() => {
+      if (server) server.close();
+    });
+
+    it('sets requiresTrigger=false when status matches a configured trigger', async () => {
+      const existingGroup = {
+        name: 'ENG-50',
+        folder: 'linear_eng-50',
+        trigger: '@Seb',
+        added_at: '2026-03-21T12:00:00Z',
+        requiresTrigger: true,
+        metadata: { type: 'issue', identifier: 'ENG-50', title: 'Test issue' },
+      };
+      opts = createTestOpts({
+        registeredGroups: vi.fn(() => ({
+          'linear:ENG-50': existingGroup,
+        })),
+      });
+      channel = new LinearChannel(
+        SECRET,
+        'test-client-id',
+        'test-client-secret',
+        '',
+        opts,
+        [], // allowedTeams
+        ['In Progress', 'Done'], // statusTriggers
+      );
+      await channel.connect();
+      const result = await startServer(opts.app!);
+      server = result.server;
+      port = result.port;
+
+      const payload = {
+        type: 'Issue',
+        action: 'update',
+        data: {
+          identifier: 'ENG-50',
+          title: 'Test issue',
+          state: { name: 'In Progress', type: 'started' },
+          team: { key: 'ENG' },
+          url: 'https://linear.app/test/issue/ENG-50',
+        },
+        actor: { id: 'user-1', name: 'Chris' },
+      };
+      await sendLinearWebhook(port, { payload, secret: SECRET });
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(opts.registerGroup).toHaveBeenCalledWith(
+        'linear:ENG-50',
+        expect.objectContaining({
+          requiresTrigger: false,
+        }),
+      );
+    });
+
+    it('does not change trigger for non-matching status', async () => {
+      const existingGroup = {
+        name: 'ENG-51',
+        folder: 'linear_eng-51',
+        trigger: '@Seb',
+        added_at: '2026-03-21T12:00:00Z',
+        requiresTrigger: true,
+        metadata: { type: 'issue', identifier: 'ENG-51', title: 'Test issue' },
+      };
+      opts = createTestOpts({
+        registeredGroups: vi.fn(() => ({
+          'linear:ENG-51': existingGroup,
+        })),
+      });
+      channel = new LinearChannel(
+        SECRET,
+        'test-client-id',
+        'test-client-secret',
+        '',
+        opts,
+        [],
+        ['In Progress'], // only "In Progress" triggers
+      );
+      await channel.connect();
+      const result = await startServer(opts.app!);
+      server = result.server;
+      port = result.port;
+
+      const payload = {
+        type: 'Issue',
+        action: 'update',
+        data: {
+          identifier: 'ENG-51',
+          title: 'Test issue',
+          state: { name: 'Backlog', type: 'backlog' },
+          team: { key: 'ENG' },
+          url: 'https://linear.app/test/issue/ENG-51',
+        },
+        actor: { id: 'user-1', name: 'Chris' },
+      };
+      await sendLinearWebhook(port, { payload, secret: SECRET });
+      await new Promise((r) => setTimeout(r, 50));
+
+      // registerGroup should be called for initial registration but NOT with requiresTrigger: false
+      const calls = (opts.registerGroup as any).mock.calls;
+      const triggerFalseCalls = calls.filter(
+        (c: any) => c[1]?.requiresTrigger === false,
+      );
+      expect(triggerFalseCalls).toHaveLength(0);
+    });
+
+    it('does not trigger when no status triggers are configured', async () => {
+      const existingGroup = {
+        name: 'ENG-52',
+        folder: 'linear_eng-52',
+        trigger: '@Seb',
+        added_at: '2026-03-21T12:00:00Z',
+        requiresTrigger: true,
+        metadata: { type: 'issue', identifier: 'ENG-52', title: 'Test issue' },
+      };
+      opts = createTestOpts({
+        registeredGroups: vi.fn(() => ({
+          'linear:ENG-52': existingGroup,
+        })),
+      });
+      channel = new LinearChannel(
+        SECRET,
+        'test-client-id',
+        'test-client-secret',
+        '',
+        opts,
+        [], // no allowedTeams
+        [], // no statusTriggers
+      );
+      await channel.connect();
+      const result = await startServer(opts.app!);
+      server = result.server;
+      port = result.port;
+
+      const payload = {
+        type: 'Issue',
+        action: 'update',
+        data: {
+          identifier: 'ENG-52',
+          title: 'Test issue',
+          state: { name: 'In Progress', type: 'started' },
+          team: { key: 'ENG' },
+          url: 'https://linear.app/test/issue/ENG-52',
+        },
+        actor: { id: 'user-1', name: 'Chris' },
+      };
+      await sendLinearWebhook(port, { payload, secret: SECRET });
+      await new Promise((r) => setTimeout(r, 50));
+
+      const calls = (opts.registerGroup as any).mock.calls;
+      const triggerFalseCalls = calls.filter(
+        (c: any) => c[1]?.requiresTrigger === false,
+      );
+      expect(triggerFalseCalls).toHaveLength(0);
+    });
+
+    it('does not trigger when agent session is active', async () => {
+      opts = createTestOpts({
+        registeredGroups: vi.fn(() => ({})),
+      });
+      channel = new LinearChannel(
+        SECRET,
+        'test-client-id',
+        'test-client-secret',
+        '',
+        opts,
+        [],
+        ['In Progress'],
+      );
+      await channel.connect();
+      const result = await startServer(opts.app!);
+      server = result.server;
+      port = result.port;
+
+      // First, create an agent session for this issue
+      const delegationPayload = {
+        type: 'AgentSessionEvent',
+        action: 'created',
+        agentSession: {
+          id: 'session-abc',
+          issue: {
+            id: 'issue-id-53',
+            identifier: 'ENG-53',
+            title: 'Test issue',
+            team: { key: 'ENG' },
+            url: 'https://linear.app/test/issue/ENG-53',
+          },
+        },
+        actor: { id: 'user-1', name: 'Chris' },
+        createdAt: '2026-03-21T12:00:00Z',
+      };
+      await sendLinearWebhook(port, {
+        payload: delegationPayload,
+        secret: SECRET,
+      });
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Clear mock to isolate the next call
+      (opts.registerGroup as any).mockClear();
+
+      // Now update the registered group to have requiresTrigger: true
+      // (simulating the group being re-registered after delegation ended)
+      const existingGroup = {
+        name: 'ENG-53',
+        folder: 'linear_eng-53',
+        trigger: '@Seb',
+        added_at: '2026-03-21T12:00:00Z',
+        requiresTrigger: true,
+        metadata: { type: 'issue', identifier: 'ENG-53', title: 'Test issue' },
+      };
+      (opts.registeredGroups as any).mockReturnValue({
+        'linear:ENG-53': existingGroup,
+      });
+
+      // Send a status change that matches the trigger
+      const statusPayload = {
+        type: 'Issue',
+        action: 'update',
+        data: {
+          identifier: 'ENG-53',
+          title: 'Test issue',
+          state: { name: 'In Progress', type: 'started' },
+          team: { key: 'ENG' },
+          url: 'https://linear.app/test/issue/ENG-53',
+        },
+        actor: { id: 'user-1', name: 'Chris' },
+      };
+      await sendLinearWebhook(port, {
+        payload: statusPayload,
+        secret: SECRET,
+      });
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Status trigger should NOT fire because agent session is active
+      const calls = (opts.registerGroup as any).mock.calls;
+      const triggerFalseCalls = calls.filter(
+        (c: any) => c[0] === 'linear:ENG-53' && c[1]?.requiresTrigger === false,
+      );
+      expect(triggerFalseCalls).toHaveLength(0);
+    });
+  });
 });
