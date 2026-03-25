@@ -27,6 +27,25 @@ import { getRuntime } from './runtime/index.js';
 import type { RuntimeInstance, VolumeMount } from './runtime/runtime.js';
 import { RegisteredGroup } from './types.js';
 
+/**
+ * Returns channel-specific skill directory names for a group based on its
+ * folder prefix and metadata. These are copied into the container alongside
+ * the global skills.
+ */
+export function getChannelSkillDirs(group: RegisteredGroup): string[] {
+  const dirs: string[] = [];
+
+  if (group.folder.startsWith('linear_')) {
+    dirs.push('skills-linear');
+  } else if (group.folder.startsWith('github_')) {
+    const type = group.metadata?.type;
+    if (type === 'pull_request') dirs.push('skills-github-pr');
+    else if (type === 'issue') dirs.push('skills-github-issue');
+  }
+
+  return dirs;
+}
+
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
@@ -157,6 +176,22 @@ function buildVolumeMounts(
       fs.cpSync(srcDir, dstDir, { recursive: true });
     }
   }
+
+  // Channel-specific skills (e.g. skills-linear/, skills-github-pr/)
+  for (const dirName of getChannelSkillDirs(group)) {
+    const src = path.join(process.cwd(), 'container', dirName);
+    if (!fs.existsSync(src)) continue;
+    for (const skillDir of fs.readdirSync(src)) {
+      const srcDir = path.join(src, skillDir);
+      if (!fs.statSync(srcDir).isDirectory()) continue;
+      const dstDir = path.join(skillsDst, skillDir);
+      if (fs.existsSync(dstDir)) {
+        logger.debug(`Channel skill "${skillDir}" overrides global skill`);
+      }
+      fs.cpSync(srcDir, dstDir, { recursive: true });
+    }
+  }
+
   mounts.push({
     hostPath: groupSessionsDir,
     containerPath: '/home/node/.claude',
