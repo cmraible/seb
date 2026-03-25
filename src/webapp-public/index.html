@@ -1,0 +1,725 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>NanoClaw</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    :root {
+      --bg: var(--tg-theme-bg-color, #fff);
+      --text: var(--tg-theme-text-color, #000);
+      --hint: var(--tg-theme-hint-color, #999);
+      --link: var(--tg-theme-link-color, #2481cc);
+      --btn: var(--tg-theme-button-color, #2481cc);
+      --btn-text: var(--tg-theme-button-text-color, #fff);
+      --secondary-bg: var(--tg-theme-secondary-bg-color, #f0f0f0);
+      --section-bg: var(--tg-theme-section-bg-color, var(--bg));
+      --section-header: var(--tg-theme-section-header-text-color, var(--hint));
+      --subtitle: var(--tg-theme-subtitle-text-color, var(--hint));
+      --destructive: var(--tg-theme-destructive-text-color, #e53935);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--secondary-bg);
+      color: var(--text);
+      font-size: 16px;
+      line-height: 1.4;
+      -webkit-font-smoothing: antialiased;
+      padding-bottom: 80px;
+    }
+
+    .header {
+      background: var(--section-bg);
+      padding: 16px 20px;
+      border-bottom: 0.5px solid rgba(0,0,0,0.1);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .header h1 {
+      font-size: 20px;
+      font-weight: 600;
+    }
+
+    .header .back-btn {
+      display: none;
+      background: none;
+      border: none;
+      color: var(--link);
+      font-size: 16px;
+      cursor: pointer;
+      padding: 4px;
+    }
+
+    .section {
+      margin-top: 16px;
+    }
+
+    .section-header {
+      color: var(--section-header);
+      font-size: 13px;
+      font-weight: 400;
+      text-transform: uppercase;
+      padding: 0 20px 8px;
+      letter-spacing: 0.5px;
+    }
+
+    .section-content {
+      background: var(--section-bg);
+      border-top: 0.5px solid rgba(0,0,0,0.08);
+      border-bottom: 0.5px solid rgba(0,0,0,0.08);
+    }
+
+    .list-item {
+      display: flex;
+      align-items: center;
+      padding: 12px 20px;
+      border-bottom: 0.5px solid rgba(0,0,0,0.08);
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      transition: background 0.15s;
+    }
+
+    .list-item:last-child { border-bottom: none; }
+    .list-item:active { background: rgba(0,0,0,0.05); }
+
+    .list-item .icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      background: var(--btn);
+      color: var(--btn-text);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      margin-right: 12px;
+      flex-shrink: 0;
+    }
+
+    .list-item .icon.tg { background: #0088cc; }
+    .list-item .icon.wa { background: #25d366; }
+    .list-item .icon.gh { background: #24292e; }
+    .list-item .icon.dc { background: #5865f2; }
+    .list-item .icon.sl { background: #4a154b; }
+
+    .list-item .info { flex: 1; min-width: 0; }
+    .list-item .info .name { font-size: 16px; font-weight: 500; }
+    .list-item .info .detail {
+      font-size: 13px;
+      color: var(--subtitle);
+      margin-top: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .list-item .chevron {
+      color: var(--hint);
+      font-size: 14px;
+      margin-left: 8px;
+    }
+
+    .badge {
+      display: inline-block;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-weight: 500;
+      margin-left: 8px;
+    }
+
+    .badge.main { background: var(--btn); color: var(--btn-text); }
+    .badge.active { background: #4caf50; color: #fff; }
+    .badge.paused { background: #ff9800; color: #fff; }
+
+    /* Detail view */
+    .view { display: none; }
+    .view.active { display: block; }
+
+    .field-group {
+      background: var(--section-bg);
+      border-top: 0.5px solid rgba(0,0,0,0.08);
+      border-bottom: 0.5px solid rgba(0,0,0,0.08);
+    }
+
+    .field {
+      display: flex;
+      align-items: center;
+      padding: 12px 20px;
+      border-bottom: 0.5px solid rgba(0,0,0,0.08);
+    }
+
+    .field:last-child { border-bottom: none; }
+
+    .field label {
+      font-size: 16px;
+      flex: 1;
+    }
+
+    .field .value {
+      color: var(--subtitle);
+      font-size: 16px;
+      text-align: right;
+      max-width: 60%;
+      word-break: break-all;
+    }
+
+    .field input[type="text"] {
+      background: var(--secondary-bg);
+      border: none;
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 15px;
+      color: var(--text);
+      text-align: right;
+      width: 200px;
+      outline: none;
+    }
+
+    .toggle {
+      position: relative;
+      width: 51px;
+      height: 31px;
+      flex-shrink: 0;
+    }
+
+    .toggle input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .toggle .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: #ccc;
+      border-radius: 31px;
+      transition: 0.3s;
+    }
+
+    .toggle .slider:before {
+      position: absolute;
+      content: "";
+      height: 27px;
+      width: 27px;
+      left: 2px;
+      bottom: 2px;
+      background: white;
+      border-radius: 50%;
+      transition: 0.3s;
+    }
+
+    .toggle input:checked + .slider { background: #4caf50; }
+    .toggle input:checked + .slider:before { transform: translateX(20px); }
+
+    .action-btn {
+      display: block;
+      width: calc(100% - 40px);
+      margin: 16px 20px;
+      padding: 14px;
+      border: none;
+      border-radius: 12px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      text-align: center;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .action-btn.primary {
+      background: var(--btn);
+      color: var(--btn-text);
+    }
+
+    .action-btn.danger {
+      background: none;
+      color: var(--destructive);
+    }
+
+    .section-footer {
+      color: var(--hint);
+      font-size: 13px;
+      padding: 8px 20px 0;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--hint);
+    }
+
+    .empty-state .emoji { font-size: 48px; margin-bottom: 12px; }
+    .empty-state p { font-size: 15px; }
+
+    .loading {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--hint);
+    }
+
+    /* Tab bar */
+    .tabs {
+      display: flex;
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--section-bg);
+      border-top: 0.5px solid rgba(0,0,0,0.1);
+      z-index: 100;
+      padding-bottom: env(safe-area-inset-bottom, 0);
+    }
+
+    .tab {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 8px 4px 6px;
+      cursor: pointer;
+      color: var(--hint);
+      font-size: 10px;
+      -webkit-tap-highlight-color: transparent;
+      border: none;
+      background: none;
+    }
+
+    .tab.active { color: var(--btn); }
+    .tab .tab-icon { font-size: 22px; margin-bottom: 2px; }
+  </style>
+</head>
+<body>
+  <!-- Groups List View -->
+  <div id="view-groups" class="view active">
+    <div class="header">
+      <h1>Groups</h1>
+    </div>
+    <div id="groups-list" class="loading">Loading...</div>
+  </div>
+
+  <!-- Group Detail View -->
+  <div id="view-detail" class="view">
+    <div class="header">
+      <button class="back-btn" style="display:inline" onclick="showView('groups')">&larr; Back</button>
+      <h1 id="detail-title">Group</h1>
+    </div>
+
+    <div class="section">
+      <div class="section-header">Info</div>
+      <div class="field-group">
+        <div class="field">
+          <label>JID</label>
+          <span class="value" id="detail-jid"></span>
+        </div>
+        <div class="field">
+          <label>Folder</label>
+          <span class="value" id="detail-folder"></span>
+        </div>
+        <div class="field">
+          <label>Added</label>
+          <span class="value" id="detail-added"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-header">Configuration</div>
+      <div class="field-group">
+        <div class="field">
+          <label>Trigger</label>
+          <input type="text" id="detail-trigger" placeholder="@name">
+        </div>
+        <div class="field">
+          <label>Requires Trigger</label>
+          <label class="toggle">
+            <input type="checkbox" id="detail-requires-trigger">
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+      <div class="section-footer">When "Requires Trigger" is off, the bot responds to every message.</div>
+    </div>
+
+    <button class="action-btn primary" onclick="saveGroup()">Save Changes</button>
+    <button class="action-btn danger" id="detail-delete-btn" onclick="deleteGroup()">Remove Group</button>
+  </div>
+
+  <!-- Available Groups View -->
+  <div id="view-available" class="view">
+    <div class="header">
+      <h1>Add Group</h1>
+    </div>
+    <div id="available-list" class="loading">Loading...</div>
+  </div>
+
+  <!-- Add Group Form -->
+  <div id="view-add" class="view">
+    <div class="header">
+      <button class="back-btn" style="display:inline" onclick="showView('available')">&larr; Back</button>
+      <h1>Register Group</h1>
+    </div>
+
+    <div class="section">
+      <div class="section-header">Details</div>
+      <div class="field-group">
+        <div class="field">
+          <label>Name</label>
+          <span class="value" id="add-name"></span>
+        </div>
+        <div class="field">
+          <label>JID</label>
+          <span class="value" id="add-jid"></span>
+        </div>
+        <div class="field">
+          <label>Channel</label>
+          <span class="value" id="add-channel"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-header">Configuration</div>
+      <div class="field-group">
+        <div class="field">
+          <label>Folder</label>
+          <input type="text" id="add-folder" placeholder="channel_group-name">
+        </div>
+        <div class="field">
+          <label>Trigger</label>
+          <input type="text" id="add-trigger" placeholder="@Seb">
+        </div>
+        <div class="field">
+          <label>Requires Trigger</label>
+          <label class="toggle">
+            <input type="checkbox" id="add-requires-trigger" checked>
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <button class="action-btn primary" onclick="registerGroup()">Register Group</button>
+  </div>
+
+  <!-- Tasks View -->
+  <div id="view-tasks" class="view">
+    <div class="header">
+      <h1>Tasks</h1>
+    </div>
+    <div id="tasks-list" class="loading">Loading...</div>
+  </div>
+
+  <!-- Tab Bar -->
+  <div class="tabs">
+    <button class="tab active" data-view="groups" onclick="switchTab(this)">
+      <span class="tab-icon">💬</span>
+      Groups
+    </button>
+    <button class="tab" data-view="available" onclick="switchTab(this)">
+      <span class="tab-icon">➕</span>
+      Add
+    </button>
+    <button class="tab" data-view="tasks" onclick="switchTab(this)">
+      <span class="tab-icon">⏰</span>
+      Tasks
+    </button>
+  </div>
+
+  <script>
+    const tg = window.Telegram?.WebApp;
+    if (tg) {
+      tg.ready();
+      tg.expand();
+    }
+
+    const initData = tg?.initData || '';
+    let currentGroupJid = null;
+    let addingGroup = null;
+
+    function headers() {
+      return {
+        'Content-Type': 'application/json',
+        'X-Telegram-Init-Data': initData,
+      };
+    }
+
+    async function api(path, opts = {}) {
+      const res = await fetch('/api' + path, {
+        ...opts,
+        headers: { ...headers(), ...(opts.headers || {}) },
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      return res.json();
+    }
+
+    function channelIcon(jid) {
+      if (jid.startsWith('tg:')) return { cls: 'tg', emoji: '✈' };
+      if (jid.startsWith('gh:')) return { cls: 'gh', emoji: '🐙' };
+      if (jid.startsWith('dc:')) return { cls: 'dc', emoji: '🎮' };
+      if (jid.includes('@g.us') || jid.includes('@s.whatsapp')) return { cls: 'wa', emoji: '📱' };
+      return { cls: '', emoji: '💬' };
+    }
+
+    function formatDate(iso) {
+      if (!iso) return '—';
+      const d = new Date(iso);
+      return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    }
+
+    // --- Views ---
+
+    function showView(name) {
+      document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+      document.getElementById('view-' + name).classList.add('active');
+
+      if (name === 'groups') loadGroups();
+      if (name === 'available') loadAvailable();
+      if (name === 'tasks') loadTasks();
+    }
+
+    function switchTab(el) {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      el.classList.add('active');
+      showView(el.dataset.view);
+    }
+
+    // --- Groups List ---
+
+    async function loadGroups() {
+      const container = document.getElementById('groups-list');
+      container.innerHTML = '<div class="loading">Loading...</div>';
+
+      try {
+        const groups = await api('/groups');
+        if (groups.length === 0) {
+          container.innerHTML = '<div class="empty-state"><div class="emoji">📭</div><p>No groups registered yet.<br>Tap "Add" to get started.</p></div>';
+          return;
+        }
+
+        let html = '<div class="section-content">';
+        for (const g of groups) {
+          const icon = channelIcon(g.jid);
+          const badges = [];
+          if (g.isMain) badges.push('<span class="badge main">Main</span>');
+          if (!g.requiresTrigger) badges.push('<span class="badge active">Always On</span>');
+
+          html += `
+            <div class="list-item" onclick="openGroup('${encodeURIComponent(g.jid)}')">
+              <div class="icon ${icon.cls}">${icon.emoji}</div>
+              <div class="info">
+                <div class="name">${esc(g.name)}${badges.join('')}</div>
+                <div class="detail">${esc(g.trigger)} · ${esc(g.folder)}</div>
+              </div>
+              <span class="chevron">›</span>
+            </div>`;
+        }
+        html += '</div>';
+        container.innerHTML = html;
+      } catch (err) {
+        container.innerHTML = `<div class="empty-state"><p>Error loading groups: ${esc(err.message)}</p></div>`;
+      }
+    }
+
+    async function openGroup(encodedJid) {
+      const jid = decodeURIComponent(encodedJid);
+      currentGroupJid = jid;
+
+      try {
+        const g = await api('/groups/' + encodedJid);
+        document.getElementById('detail-title').textContent = g.name;
+        document.getElementById('detail-jid').textContent = g.jid;
+        document.getElementById('detail-folder').textContent = g.folder;
+        document.getElementById('detail-added').textContent = formatDate(g.added_at);
+        document.getElementById('detail-trigger').value = g.trigger;
+        document.getElementById('detail-requires-trigger').checked = g.requiresTrigger;
+        document.getElementById('detail-delete-btn').style.display = g.isMain ? 'none' : 'block';
+        showView('detail');
+      } catch (err) {
+        tg?.showAlert?.('Error: ' + err.message) || alert('Error: ' + err.message);
+      }
+    }
+
+    async function saveGroup() {
+      if (!currentGroupJid) return;
+      const trigger = document.getElementById('detail-trigger').value.trim();
+      const requiresTrigger = document.getElementById('detail-requires-trigger').checked;
+
+      if (!trigger) {
+        tg?.showAlert?.('Trigger cannot be empty') || alert('Trigger cannot be empty');
+        return;
+      }
+
+      try {
+        await api('/groups/' + encodeURIComponent(currentGroupJid), {
+          method: 'PUT',
+          body: JSON.stringify({ trigger, requiresTrigger }),
+        });
+        tg?.showAlert?.('Saved!') || alert('Saved!');
+        showView('groups');
+      } catch (err) {
+        tg?.showAlert?.('Error: ' + err.message) || alert('Error: ' + err.message);
+      }
+    }
+
+    async function deleteGroup() {
+      if (!currentGroupJid) return;
+      const confirmed = await new Promise(resolve => {
+        if (tg?.showConfirm) {
+          tg.showConfirm('Remove this group?', resolve);
+        } else {
+          resolve(confirm('Remove this group?'));
+        }
+      });
+
+      if (!confirmed) return;
+
+      try {
+        await api('/groups/' + encodeURIComponent(currentGroupJid), { method: 'DELETE' });
+        tg?.showAlert?.('Group removed') || alert('Group removed');
+        showView('groups');
+      } catch (err) {
+        tg?.showAlert?.('Error: ' + err.message) || alert('Error: ' + err.message);
+      }
+    }
+
+    // --- Available Groups ---
+
+    async function loadAvailable() {
+      const container = document.getElementById('available-list');
+      container.innerHTML = '<div class="loading">Loading...</div>';
+
+      try {
+        const groups = await api('/available-groups');
+        if (groups.length === 0) {
+          container.innerHTML = '<div class="empty-state"><div class="emoji">🔍</div><p>No unregistered groups found.<br>Send a message in a group to discover it.</p></div>';
+          return;
+        }
+
+        let html = '<div class="section-content">';
+        for (const g of groups) {
+          const icon = channelIcon(g.jid);
+          html += `
+            <div class="list-item" onclick="startAddGroup(${esc(JSON.stringify(g), true)})">
+              <div class="icon ${icon.cls}">${icon.emoji}</div>
+              <div class="info">
+                <div class="name">${esc(g.name)}</div>
+                <div class="detail">${esc(g.channel || 'unknown')} · Last active: ${formatDate(g.lastActivity)}</div>
+              </div>
+              <span class="chevron">›</span>
+            </div>`;
+        }
+        html += '</div>';
+        container.innerHTML = html;
+      } catch (err) {
+        container.innerHTML = `<div class="empty-state"><p>Error: ${esc(err.message)}</p></div>`;
+      }
+    }
+
+    function startAddGroup(group) {
+      addingGroup = group;
+      document.getElementById('add-name').textContent = group.name;
+      document.getElementById('add-jid').textContent = group.jid;
+      document.getElementById('add-channel').textContent = group.channel || 'unknown';
+
+      // Auto-generate folder name
+      const channel = group.channel || 'chat';
+      const safeName = group.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+      document.getElementById('add-folder').value = `${channel}_${safeName}`;
+      document.getElementById('add-trigger').value = '@Seb';
+
+      showView('add');
+    }
+
+    async function registerGroup() {
+      if (!addingGroup) return;
+      const folder = document.getElementById('add-folder').value.trim();
+      const trigger = document.getElementById('add-trigger').value.trim();
+      const requiresTrigger = document.getElementById('add-requires-trigger').checked;
+
+      if (!folder || !trigger) {
+        tg?.showAlert?.('Folder and trigger are required') || alert('Folder and trigger are required');
+        return;
+      }
+
+      try {
+        await api('/groups', {
+          method: 'POST',
+          body: JSON.stringify({
+            jid: addingGroup.jid,
+            name: addingGroup.name,
+            folder,
+            trigger,
+            requiresTrigger,
+          }),
+        });
+        tg?.showAlert?.('Group registered!') || alert('Group registered!');
+        showView('groups');
+        // Switch to groups tab
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelector('.tab[data-view="groups"]').classList.add('active');
+      } catch (err) {
+        tg?.showAlert?.('Error: ' + err.message) || alert('Error: ' + err.message);
+      }
+    }
+
+    // --- Tasks ---
+
+    async function loadTasks() {
+      const container = document.getElementById('tasks-list');
+      container.innerHTML = '<div class="loading">Loading...</div>';
+
+      try {
+        const tasks = await api('/tasks');
+        if (tasks.length === 0) {
+          container.innerHTML = '<div class="empty-state"><div class="emoji">📋</div><p>No scheduled tasks.</p></div>';
+          return;
+        }
+
+        let html = '<div class="section-content">';
+        for (const t of tasks) {
+          const statusBadge = t.status === 'paused'
+            ? '<span class="badge paused">Paused</span>'
+            : '<span class="badge active">Active</span>';
+          const preview = t.prompt.length > 60 ? t.prompt.slice(0, 57) + '...' : t.prompt;
+
+          html += `
+            <div class="list-item">
+              <div class="icon">⏰</div>
+              <div class="info">
+                <div class="name">${esc(preview)}${statusBadge}</div>
+                <div class="detail">${esc(t.schedule_type)}: ${esc(t.schedule_value)} · ${esc(t.group_folder)}</div>
+              </div>
+            </div>`;
+        }
+        html += '</div>';
+        container.innerHTML = html;
+      } catch (err) {
+        container.innerHTML = `<div class="empty-state"><p>Error: ${esc(err.message)}</p></div>`;
+      }
+    }
+
+    // --- Helpers ---
+
+    function esc(str, attr = false) {
+      if (typeof str !== 'string') str = String(str ?? '');
+      const div = document.createElement('div');
+      div.textContent = str;
+      const escaped = div.innerHTML;
+      return attr ? escaped.replace(/'/g, '&#39;').replace(/"/g, '&quot;') : escaped;
+    }
+
+    // Initial load
+    loadGroups();
+  </script>
+</body>
+</html>

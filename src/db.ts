@@ -669,6 +669,10 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
   return result;
 }
 
+export function deleteRegisteredGroup(jid: string): void {
+  db.prepare('DELETE FROM registered_groups WHERE jid = ?').run(jid);
+}
+
 // --- JSON migration ---
 
 function migrateJsonState(): void {
