@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { execSync } from 'child_process';
 import express from 'express';
 import fs from 'fs';
@@ -43,6 +44,7 @@ import {
 } from './container-runner.js';
 import { PROXY_BIND_HOST } from './container-runtime.js';
 import {
+  createTask,
   deleteTask,
   getAllChats,
   getAllRegisteredGroups,
@@ -89,6 +91,31 @@ import { startWebApp } from './webapp.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
+
+/**
+ * Build the prompt for the post-deploy verification task.
+ * The agent checks that the deploy is healthy and the correct commit is running.
+ */
+export function buildVerifyPrompt(commitInfo: string): string {
+  const commitLine = commitInfo
+    ? `The deployed commit is: \`${commitInfo}\``
+    : 'The commit info is unknown.';
+
+  return `You are running a post-deploy verification check. NanoClaw was just restarted after a deploy. ${commitLine}
+
+Verify the deploy is healthy by running these checks:
+
+1. **Health endpoint**: Run \`curl -s http://localhost:3000/health\` and confirm it returns \`{"status":"ok"}\` with the expected channels listed.
+2. **Process check**: Run \`systemctl --user is-active nanoclaw\` to confirm the service is running.
+3. **Git verification**: Run \`git log -1 --format="%h %s"\` in the project directory to confirm the deployed commit matches.
+4. **Webhook endpoints**: Run \`curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/github/webhook\` and \`curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/linear/webhook\` — they should return 400 or 405 (not 404 or 500), confirming the routes are mounted.
+
+Report a brief summary:
+- ✅ if all checks pass: "Deploy verified — all systems healthy"
+- ⚠️ if any check fails: describe what failed and suggest next steps
+
+Keep the message short (2-3 sentences max). Do NOT investigate or fix issues — just report what you find.`;
+}
 
 let lastTimestamp = '';
 let sessions: Record<string, string> = {};
@@ -890,16 +917,18 @@ async function main(): Promise<void> {
   recoverPendingMessages();
 
   // Notify main group that NanoClaw has started
+  let startupCommitInfo = '';
   try {
-    const mainJid = Object.entries(registeredGroups).find(
+    const mainEntry = Object.entries(registeredGroups).find(
       ([, g]) => g.isMain,
-    )?.[0];
+    );
+    const mainJid = mainEntry?.[0];
+    const mainGroup = mainEntry?.[1];
     if (mainJid) {
       const channel = findChannel(channels, mainJid);
       if (channel) {
-        let commitInfo = '';
         try {
-          commitInfo = execSync('git log -1 --format="%h %s"', {
+          startupCommitInfo = execSync('git log -1 --format="%h %s"', {
             encoding: 'utf-8',
           }).trim();
         } catch {
@@ -907,8 +936,33 @@ async function main(): Promise<void> {
         }
         await channel.sendMessage(
           mainJid,
-          `NanoClaw started (${commitInfo || 'unknown'})`,
+          `NanoClaw started (${startupCommitInfo || 'unknown'})`,
         );
+      }
+
+      // Schedule a post-deploy verification task to run shortly after startup.
+      // The agent checks health, reviews the deployed commit, and reports back.
+      if (mainGroup) {
+        try {
+          const now = new Date();
+          // Run 30 seconds after startup to give services time to stabilize
+          const runAt = new Date(now.getTime() + 30_000);
+          createTask({
+            id: crypto.randomUUID(),
+            group_folder: mainGroup.folder,
+            chat_jid: mainJid,
+            prompt: buildVerifyPrompt(startupCommitInfo),
+            schedule_type: 'once',
+            schedule_value: runAt.toISOString(),
+            context_mode: 'isolated',
+            next_run: runAt.toISOString(),
+            status: 'active',
+            created_at: now.toISOString(),
+          });
+          logger.info('Post-deploy verification task scheduled');
+        } catch (err) {
+          logger.warn({ err }, 'Failed to schedule post-deploy verification');
+        }
       }
     }
   } catch (err) {
