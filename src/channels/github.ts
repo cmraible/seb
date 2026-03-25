@@ -163,6 +163,12 @@ function formatEvent(event: string, payload: any): FormattedEvent | null {
           text: `[GitHub] Issue ${action}: #${issue.number} "${issue.title}" in ${repo}\n${issue.html_url}`,
         };
       }
+      if (action === 'assigned') {
+        const assignee = payload.assignee?.login || 'unknown';
+        return {
+          text: `[GitHub] Issue #${issue.number} "${issue.title}" assigned to ${assignee} in ${repo}\n${issue.html_url}`,
+        };
+      }
       return null;
     }
 
@@ -402,7 +408,13 @@ export class GitHubChannel implements Channel {
         // Issues require a trigger unless opened/assigned to the bot.
         const author = extractAuthor(event, payload) || prAuthorFromApi;
         const isBotAuthor = !!this.botUsername && author === this.botUsername;
-        const skipTrigger = groupType === 'pull_request' || isBotAuthor;
+        const isBotAssigned =
+          !!this.botUsername &&
+          event === 'issues' &&
+          payload.action === 'assigned' &&
+          payload.assignee?.login === this.botUsername;
+        const skipTrigger =
+          groupType === 'pull_request' || isBotAuthor || isBotAssigned;
         this.opts.registerGroup(chatJid, {
           name: chatName,
           folder,
@@ -417,22 +429,25 @@ export class GitHubChannel implements Channel {
           { chatJid, folder, author, isBotAuthor },
           'Auto-registered GitHub group',
         );
-      } else if (
-        event === 'check_suite' &&
-        registered[chatJid].requiresTrigger !== false
-      ) {
+      } else if (registered[chatJid].requiresTrigger !== false) {
         // Group already exists but might have been registered before we knew
-        // it was the bot's own PR. Update requiresTrigger if needed.
+        // it was the bot's own PR or before the bot was assigned.
+        // Update requiresTrigger if needed.
         const author = extractAuthor(event, payload) || prAuthorFromApi;
         const isBotAuthor = !!this.botUsername && author === this.botUsername;
-        if (isBotAuthor) {
+        const isBotAssigned =
+          !!this.botUsername &&
+          event === 'issues' &&
+          payload.action === 'assigned' &&
+          payload.assignee?.login === this.botUsername;
+        if (isBotAuthor || isBotAssigned) {
           this.opts.registerGroup(chatJid, {
             ...registered[chatJid],
             requiresTrigger: false,
           });
           logger.info(
-            { chatJid, author },
-            'Updated GitHub group to skip trigger (bot PR)',
+            { chatJid, author, isBotAssigned },
+            'Updated GitHub group to skip trigger (bot PR or assignment)',
           );
         }
       }
