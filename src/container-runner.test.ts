@@ -129,6 +129,7 @@ import {
   runContainerAgent,
   ContainerOutput,
   writeLogsSnapshot,
+  getChannelSkillDirs,
 } from './container-runner.js';
 import type { RegisteredGroup } from './types.js';
 import type { TaskRunLogEntry } from './container-runner.js';
@@ -474,5 +475,60 @@ describe('writeLogsSnapshot', () => {
       .mock.calls.map((c) => String(c[0]));
     expect(readdirCalls).toHaveLength(1);
     expect(readdirCalls[0]).toContain('my-group');
+  });
+});
+
+describe('getChannelSkillDirs', () => {
+  function makeGroup(
+    folder: string,
+    metadata?: Record<string, string>,
+  ): RegisteredGroup {
+    return {
+      name: 'Test',
+      folder,
+      trigger: '@test',
+      added_at: new Date().toISOString(),
+      metadata,
+    };
+  }
+
+  it('returns skills-linear for linear_ folders', () => {
+    expect(getChannelSkillDirs(makeGroup('linear_chr-86'))).toEqual([
+      'skills-linear',
+    ]);
+  });
+
+  it('returns skills-github-pr for github_ pull_request folders', () => {
+    expect(
+      getChannelSkillDirs(
+        makeGroup('github_cmraible-seb-42', { type: 'pull_request' }),
+      ),
+    ).toEqual(['skills-github-pr']);
+  });
+
+  it('returns skills-github-issue for github_ issue folders', () => {
+    expect(
+      getChannelSkillDirs(
+        makeGroup('github_cmraible-seb-10', { type: 'issue' }),
+      ),
+    ).toEqual(['skills-github-issue']);
+  });
+
+  it('returns empty for github_ folders with unknown type', () => {
+    expect(
+      getChannelSkillDirs(makeGroup('github_cmraible-seb', { type: 'repo' })),
+    ).toEqual([]);
+  });
+
+  it('returns empty for github_ folders without metadata', () => {
+    expect(getChannelSkillDirs(makeGroup('github_cmraible-seb'))).toEqual([]);
+  });
+
+  it('returns empty for telegram folders', () => {
+    expect(getChannelSkillDirs(makeGroup('telegram_dev-team'))).toEqual([]);
+  });
+
+  it('returns empty for whatsapp folders', () => {
+    expect(getChannelSkillDirs(makeGroup('whatsapp_family'))).toEqual([]);
   });
 });
