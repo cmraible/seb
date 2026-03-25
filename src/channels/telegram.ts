@@ -94,7 +94,9 @@ export class TelegramChannel implements Channel {
         'Restart requested via /restart command',
       );
       await ctx.reply('Restarting NanoClaw...');
-      this.opts.requestRestart();
+      // Delay restart so grammy can advance the Telegram update offset.
+      // Without this, the /restart update is re-delivered on every startup → bootloop.
+      setTimeout(() => this.opts.requestRestart!(), 500);
     });
 
     // Remote control commands — forward through onMessage so the handler
