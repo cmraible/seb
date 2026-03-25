@@ -486,4 +486,109 @@ describe('GroupQueue', () => {
     resolveProcess!();
     await vi.advanceTimersByTimeAsync(10);
   });
+
+  it('preempts idle container from another group when at capacity', async () => {
+    const fs = await import('fs');
+    const resolvers: (() => void)[] = [];
+
+    const processMessages = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        resolvers.push(resolve);
+      });
+      return true;
+    });
+
+    queue.setProcessMessagesFn(processMessages);
+
+    // Fill all slots (MAX_CONCURRENT_CONTAINERS = 2 in test)
+    queue.enqueueMessageCheck('groupA@g.us');
+    queue.enqueueMessageCheck('groupB@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+    expect(processMessages).toHaveBeenCalledTimes(2);
+
+    // Register processes with group folders
+    queue.registerProcess(
+      'groupA@g.us',
+      {} as any,
+      'container-a',
+      'test-groupA',
+    );
+    queue.registerProcess(
+      'groupB@g.us',
+      {} as any,
+      'container-b',
+      'test-groupB',
+    );
+
+    // Mark group A as idle
+    queue.notifyIdle('groupA@g.us');
+
+    const writeFileSync = vi.mocked(fs.default.writeFileSync);
+    writeFileSync.mockClear();
+
+    // Group C arrives — at capacity, should preempt idle group A
+    queue.enqueueMessageCheck('groupC@g.us');
+
+    const closeWrites = writeFileSync.mock.calls.filter(
+      (call) => typeof call[0] === 'string' && call[0].endsWith('_close'),
+    );
+    expect(closeWrites).toHaveLength(1);
+    // The close sentinel should target groupA's IPC path
+    expect(closeWrites[0][0]).toContain('test-groupA');
+
+    // Clean up
+    resolvers.forEach((r) => r());
+    await vi.advanceTimersByTimeAsync(10);
+  });
+
+  it('notifyIdle preempts when other groups are waiting', async () => {
+    const fs = await import('fs');
+    const resolvers: (() => void)[] = [];
+
+    const processMessages = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        resolvers.push(resolve);
+      });
+      return true;
+    });
+
+    queue.setProcessMessagesFn(processMessages);
+
+    // Fill all slots
+    queue.enqueueMessageCheck('groupA@g.us');
+    queue.enqueueMessageCheck('groupB@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+
+    queue.registerProcess(
+      'groupA@g.us',
+      {} as any,
+      'container-a',
+      'test-groupA',
+    );
+    queue.registerProcess(
+      'groupB@g.us',
+      {} as any,
+      'container-b',
+      'test-groupB',
+    );
+
+    // Group C tries to enqueue — goes to waitingGroups
+    queue.enqueueMessageCheck('groupC@g.us');
+
+    const writeFileSync = vi.mocked(fs.default.writeFileSync);
+    writeFileSync.mockClear();
+
+    // Now group B becomes idle — should preempt because groupC is waiting
+    queue.notifyIdle('groupB@g.us');
+
+    const closeWrites = writeFileSync.mock.calls.filter(
+      (call) => typeof call[0] === 'string' && call[0].endsWith('_close'),
+    );
+    expect(closeWrites).toHaveLength(1);
+    expect(closeWrites[0][0]).toContain('test-groupB');
+
+    // Clean up
+    resolvers.forEach((r) => r());
+    await vi.advanceTimersByTimeAsync(10);
+  });
 });

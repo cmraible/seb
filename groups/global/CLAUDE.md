@@ -97,6 +97,10 @@ Before making any commits in a repository, you MUST install project dependencies
 
 This prevents CI failures from formatting/linting issues that pre-commit hooks would have caught.
 
+## Links
+
+Always include links when referencing Linear issues or GitHub PRs in messages. For Linear, use the issue URL (e.g. `https://linear.app/chrisraible/issue/CHR-84/...`). For GitHub PRs, use the PR URL (e.g. `https://github.com/owner/repo/pull/123`).
+
 ## Agent Teams
 
 When creating a team to tackle a complex task, follow these rules:

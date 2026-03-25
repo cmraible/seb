@@ -264,8 +264,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     chatJid,
     ackContext,
     async (result) => {
-      // Streaming activity updates — forward tool calls and thinking to channel
-      if (result.activity) {
+      // Streaming activity updates — only forward to Linear channels (agent sessions)
+      // Other channels (Telegram, WhatsApp, etc.) don't use these activity prefixes
+      if (result.activity && chatJid.startsWith('linear:')) {
         const { type, content, action } = result.activity;
         let activityText: string;
         if (type === 'action' && action) {
@@ -281,6 +282,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
             'Failed to send activity update',
           );
         }
+        return;
+      } else if (result.activity) {
+        // Non-Linear channels: silently skip activity updates
         return;
       }
 
@@ -299,6 +303,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         }
         // Only reset idle timer on actual results, not session-update markers (result: null)
         resetIdleTimer();
+        // Notify queue this container is idle — allows preemption if other groups are waiting
+        queue.notifyIdle(chatJid);
       }
 
       if (result.status === 'error') {
