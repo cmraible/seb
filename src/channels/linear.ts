@@ -61,6 +61,7 @@ const LINEAR_OAUTH_FILE = path.join(DATA_DIR, 'linear-oauth.json');
 
 interface LinearOAuthData {
   access_token: string;
+  refresh_token?: string;
   bot_user_id: string;
 }
 
@@ -260,7 +261,7 @@ export async function exchangeLinearOAuthCode(
   clientId: string,
   clientSecret: string,
   redirectUri: string,
-): Promise<{ access_token: string }> {
+): Promise<{ access_token: string; refresh_token?: string }> {
   const res = await fetch('https://api.linear.app/oauth/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -278,7 +279,34 @@ export async function exchangeLinearOAuthCode(
       `Linear OAuth code exchange failed (${res.status}): ${body}`,
     );
   }
-  return (await res.json()) as { access_token: string };
+  return (await res.json()) as { access_token: string; refresh_token?: string };
+}
+
+/**
+ * Refresh an OAuth access token using a refresh token.
+ */
+export async function refreshLinearOAuthToken(
+  refreshToken: string,
+  clientId: string,
+  clientSecret: string,
+): Promise<{ access_token: string; refresh_token?: string }> {
+  const res = await fetch('https://api.linear.app/oauth/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: clientId,
+      client_secret: clientSecret,
+    }).toString(),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(
+      `Linear OAuth token refresh failed (${res.status}): ${body}`,
+    );
+  }
+  return (await res.json()) as { access_token: string; refresh_token?: string };
 }
 
 /**
@@ -341,6 +369,10 @@ export class LinearChannel implements Channel {
   private clientSecret: string;
   /** Cached OAuth access token */
   private accessToken: string | null = null;
+  /** Timestamp (ms) when the access token was last fetched */
+  private tokenFetchedAt: number = 0;
+  /** Refresh token for user OAuth flow */
+  private refreshToken: string | null = null;
   /** Linear user ID of the bot — issues assigned to this user skip the trigger */
   private botUserId: string;
   /** If set, only process events from these Linear team keys */
@@ -406,17 +438,61 @@ export class LinearChannel implements Channel {
     this.saveAgentSessions();
   }
 
+  /** Max age for cached tokens (50 minutes) — well under Linear's 1-hour expiry */
+  private static TOKEN_MAX_AGE_MS = 50 * 60 * 1000;
+
   /**
-   * Get a valid Linear API access token, fetching a new one if needed.
+   * Get a valid Linear API access token, fetching or refreshing as needed.
    */
   private async getAccessToken(): Promise<string | null> {
     if (!this.clientId || !this.clientSecret) return null;
-    if (this.accessToken) return this.accessToken;
+
+    const tokenAge = Date.now() - this.tokenFetchedAt;
+    if (this.accessToken && tokenAge < LinearChannel.TOKEN_MAX_AGE_MS) {
+      return this.accessToken;
+    }
+
+    // Token is stale or missing — try refreshing the user OAuth token first
+    if (this.refreshToken) {
+      try {
+        const refreshed = await refreshLinearOAuthToken(
+          this.refreshToken,
+          this.clientId,
+          this.clientSecret,
+        );
+        this.accessToken = refreshed.access_token;
+        this.tokenFetchedAt = Date.now();
+        if (refreshed.refresh_token) {
+          this.refreshToken = refreshed.refresh_token;
+        }
+        // Persist the refreshed tokens
+        const persisted = loadLinearOAuth();
+        if (persisted) {
+          saveLinearOAuth({
+            ...persisted,
+            access_token: refreshed.access_token,
+            ...(refreshed.refresh_token
+              ? { refresh_token: refreshed.refresh_token }
+              : {}),
+          });
+        }
+        logger.info('Linear OAuth token refreshed successfully');
+        return this.accessToken;
+      } catch (err) {
+        logger.warn(
+          { err },
+          'Failed to refresh Linear OAuth token, falling back to client credentials',
+        );
+      }
+    }
+
+    // Fall back to client credentials grant
     try {
       this.accessToken = await fetchLinearOAuthToken(
         this.clientId,
         this.clientSecret,
       );
+      this.tokenFetchedAt = Date.now();
       return this.accessToken;
     } catch (err) {
       logger.error({ err }, 'Failed to obtain Linear OAuth token');
@@ -510,9 +586,11 @@ export class LinearChannel implements Channel {
     const persisted = loadLinearOAuth();
     if (persisted) {
       this.accessToken = persisted.access_token;
+      this.tokenFetchedAt = Date.now();
+      this.refreshToken = persisted.refresh_token || null;
       this.botUserId = persisted.bot_user_id;
       logger.info(
-        { botUserId: this.botUserId },
+        { botUserId: this.botUserId, hasRefreshToken: !!this.refreshToken },
         'Linear: loaded persisted OAuth token',
       );
     } else if (this.clientId && this.clientSecret) {
@@ -815,7 +893,10 @@ export class LinearChannel implements Channel {
 
     if (!res.ok) {
       const body = await res.text();
-      if (res.status === 401) this.accessToken = null;
+      if (res.status === 401) {
+        this.accessToken = null;
+        this.tokenFetchedAt = 0;
+      }
       logger.error(
         { sessionId, status: res.status, body },
         'Linear API error acknowledging agent session',
@@ -891,7 +972,10 @@ export class LinearChannel implements Channel {
 
     if (!res.ok) {
       const respBody = await res.text();
-      if (res.status === 401) this.accessToken = null;
+      if (res.status === 401) {
+        this.accessToken = null;
+        this.tokenFetchedAt = 0;
+      }
       throw new Error(
         `Linear API error posting agent activity (${res.status}): ${respBody}`,
       );
@@ -965,7 +1049,7 @@ export class LinearChannel implements Channel {
   async handleOAuthCallback(code: string): Promise<void> {
     const redirectUri = 'https://webhooks.seb-writes-code.dev/linear/callback';
 
-    const { access_token } = await exchangeLinearOAuthCode(
+    const { access_token, refresh_token } = await exchangeLinearOAuthCode(
       code,
       this.clientId,
       this.clientSecret,
@@ -974,15 +1058,21 @@ export class LinearChannel implements Channel {
 
     const botUserId = await fetchLinearViewerId(access_token);
 
-    // Persist to disk
-    saveLinearOAuth({ access_token, bot_user_id: botUserId });
+    // Persist to disk (including refresh_token if provided)
+    saveLinearOAuth({
+      access_token,
+      ...(refresh_token ? { refresh_token } : {}),
+      bot_user_id: botUserId,
+    });
 
     // Update in-memory state
     this.accessToken = access_token;
+    this.tokenFetchedAt = Date.now();
+    this.refreshToken = refresh_token || null;
     this.botUserId = botUserId;
 
     logger.info(
-      { botUserId },
+      { botUserId, hasRefreshToken: !!refresh_token },
       'Linear OAuth callback: token exchanged and persisted',
     );
   }
@@ -1103,7 +1193,10 @@ export class LinearChannel implements Channel {
 
       if (!res.ok) {
         const body = await res.text();
-        if (res.status === 401) this.accessToken = null;
+        if (res.status === 401) {
+          this.accessToken = null;
+          this.tokenFetchedAt = 0;
+        }
         logger.error(
           { identifier, status: res.status, body },
           'Linear API error posting comment',
