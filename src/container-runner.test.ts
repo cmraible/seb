@@ -295,7 +295,7 @@ describe('writeLogsSnapshot', () => {
     mockFs.mkdirSync.mockClear();
     mockFs.writeFileSync.mockClear();
     mockFs.existsSync.mockReturnValue(false);
-    mockFs.readdirSync.mockReturnValue([]);
+    (mockFs.readdirSync as ReturnType<typeof vi.fn>).mockReturnValue([]);
   });
 
   const sampleTaskLogs: TaskRunLogEntry[] = [
@@ -346,8 +346,8 @@ describe('writeLogsSnapshot', () => {
 
   it('parses container log files when log directory exists', () => {
     vi.mocked(mockFs.existsSync).mockReturnValue(true);
-    vi.mocked(mockFs.readdirSync).mockReturnValue([
-      'container-2024-06-01.log' as unknown as import('fs').Dirent,
+    (mockFs.readdirSync as ReturnType<typeof vi.fn>).mockReturnValue([
+      'container-2024-06-01.log',
     ]);
     vi.mocked(mockFs.readFileSync).mockReturnValue(
       [
@@ -375,8 +375,8 @@ describe('writeLogsSnapshot', () => {
 
   it('extracts stderr preview for non-zero exit codes', () => {
     vi.mocked(mockFs.existsSync).mockReturnValue(true);
-    vi.mocked(mockFs.readdirSync).mockReturnValue([
-      'container-2024-06-01.log' as unknown as import('fs').Dirent,
+    (mockFs.readdirSync as ReturnType<typeof vi.fn>).mockReturnValue([
+      'container-2024-06-01.log',
     ]);
     vi.mocked(mockFs.readFileSync).mockReturnValue(
       [
@@ -402,8 +402,8 @@ describe('writeLogsSnapshot', () => {
 
   it('does not extract stderr for zero exit codes', () => {
     vi.mocked(mockFs.existsSync).mockReturnValue(true);
-    vi.mocked(mockFs.readdirSync).mockReturnValue([
-      'container-2024-06-01.log' as unknown as import('fs').Dirent,
+    (mockFs.readdirSync as ReturnType<typeof vi.fn>).mockReturnValue([
+      'container-2024-06-01.log',
     ]);
     vi.mocked(mockFs.readFileSync).mockReturnValue(
       [
@@ -429,11 +429,9 @@ describe('writeLogsSnapshot', () => {
 
     // Return different files per directory call
     let callCount = 0;
-    vi.mocked(mockFs.readdirSync).mockImplementation(() => {
+    (mockFs.readdirSync as ReturnType<typeof vi.fn>).mockImplementation(() => {
       callCount++;
-      return [
-        `container-run-${callCount}.log` as unknown as import('fs').Dirent,
-      ];
+      return [`container-run-${callCount}.log`];
     });
 
     vi.mocked(mockFs.readFileSync).mockImplementation((filePath) => {
@@ -458,15 +456,15 @@ describe('writeLogsSnapshot', () => {
 
   it('non-main group sees only its own logs', () => {
     vi.mocked(mockFs.existsSync).mockReturnValue(true);
-    vi.mocked(mockFs.readdirSync).mockReturnValue([
-      'container-2024-06-01.log' as unknown as import('fs').Dirent,
-    ]);
     vi.mocked(mockFs.readFileSync).mockReturnValue(
       'Timestamp: 2024-06-01T00:00:00.000Z\nDuration: 100\nExit Code: 0\nGroup: my-group',
     );
 
-    // Clear to count only calls from this invocation
-    vi.mocked(mockFs.readdirSync).mockClear();
+    // Clear then set return value to count only calls from this invocation
+    (mockFs.readdirSync as ReturnType<typeof vi.fn>).mockClear();
+    (mockFs.readdirSync as ReturnType<typeof vi.fn>).mockReturnValue([
+      'container-2024-06-01.log',
+    ]);
 
     writeLogsSnapshot('my-group', false, [], ['my-group', 'other-group']);
 
