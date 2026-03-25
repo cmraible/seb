@@ -20,6 +20,8 @@ export interface ChannelOpts {
   /** Shared Express app for webhook channels to mount routes on */
   app?: Application;
   requestRestart?: () => void;
+  /** Request immediate processing for a group (bypasses polling interval) */
+  requestProcessing?: (chatJid: string) => void;
 }
 
 export type ChannelFactory = (opts: ChannelOpts) => Channel | null;
