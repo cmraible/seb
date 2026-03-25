@@ -81,6 +81,10 @@ All backlogs are managed in Linear (workspace: chrisraible). Never create GitHub
 
 When creating a PR on GitHub, always request a review from the repo owner (cmraible) using `gh pr create --reviewer cmraible` or `gh pr edit --add-reviewer cmraible`.
 
+## Links
+
+Always include links when referencing Linear issues or GitHub PRs in messages. For Linear, use the issue URL (e.g. `https://linear.app/chrisraible/issue/CHR-84/...`). For GitHub PRs, use the PR URL (e.g. `https://github.com/owner/repo/pull/123`).
+
 ## Agent Teams
 
 When creating a team to tackle a complex task, follow these rules:
