@@ -773,3 +773,130 @@ export function writeGroupsSnapshot(
     ),
   );
 }
+
+export interface ContainerRunLogEntry {
+  timestamp: string;
+  duration_ms: number;
+  exit_code: number;
+  group: string;
+  stderr_preview: string | null;
+}
+
+export interface TaskRunLogEntry {
+  task_id: string;
+  run_at: string;
+  duration_ms: number;
+  status: string;
+  error: string | null;
+  group_folder: string;
+}
+
+/**
+ * Parse container log files to extract structured metadata.
+ * Reads the header fields from each log file without loading full stderr/stdout.
+ */
+function parseContainerLogs(
+  groupFolder: string,
+  limit: number,
+): ContainerRunLogEntry[] {
+  const groupDir = resolveGroupFolderPath(groupFolder);
+  const logsDir = path.join(groupDir, 'logs');
+
+  if (!fs.existsSync(logsDir)) return [];
+
+  const logFiles = fs
+    .readdirSync(logsDir)
+    .filter((f) => f.startsWith('container-') && f.endsWith('.log'))
+    .sort()
+    .reverse()
+    .slice(0, limit);
+
+  const entries: ContainerRunLogEntry[] = [];
+
+  for (const file of logFiles) {
+    try {
+      const content = fs.readFileSync(path.join(logsDir, file), 'utf-8');
+      const lines = content.split('\n');
+
+      let timestamp = '';
+      let duration = 0;
+      let exitCode = 0;
+      let group = '';
+      let stderrPreview: string | null = null;
+
+      for (const line of lines) {
+        if (line.startsWith('Timestamp: ')) timestamp = line.slice(11);
+        else if (line.startsWith('Duration: '))
+          duration = parseInt(line.slice(10), 10) || 0;
+        else if (line.startsWith('Exit Code: '))
+          exitCode = parseInt(line.slice(11), 10) || 0;
+        else if (line.startsWith('Group: ')) group = line.slice(7);
+      }
+
+      // Extract first line of stderr if present and exit code non-zero
+      if (exitCode !== 0) {
+        const stderrIdx = lines.findIndex((l) => l.startsWith('=== Stderr'));
+        if (stderrIdx !== -1 && stderrIdx + 1 < lines.length) {
+          const stderrLine = lines[stderrIdx + 1]?.trim();
+          if (stderrLine && !stderrLine.startsWith('===')) {
+            stderrPreview = stderrLine.slice(0, 200);
+          }
+        }
+      }
+
+      if (timestamp) {
+        entries.push({
+          timestamp,
+          duration_ms: duration,
+          exit_code: exitCode,
+          group,
+          stderr_preview: stderrPreview,
+        });
+      }
+    } catch {
+      // Skip unparseable log files
+    }
+  }
+
+  return entries;
+}
+
+/**
+ * Write recent logs snapshot for the container to read.
+ * Main group sees all logs; non-main groups see only their own.
+ */
+export function writeLogsSnapshot(
+  groupFolder: string,
+  isMain: boolean,
+  taskRunLogs: TaskRunLogEntry[],
+  allGroupFolders: string[],
+): void {
+  const groupIpcDir = resolveGroupIpcPath(groupFolder);
+  fs.mkdirSync(groupIpcDir, { recursive: true });
+
+  // Container run logs: main sees all groups, others see only their own
+  let containerRuns: ContainerRunLogEntry[];
+  if (isMain) {
+    containerRuns = allGroupFolders
+      .flatMap((gf) => parseContainerLogs(gf, 5))
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+      .slice(0, 20);
+  } else {
+    containerRuns = parseContainerLogs(groupFolder, 20);
+  }
+
+  // Task run logs: already filtered by caller based on isMain
+  const logsFile = path.join(groupIpcDir, 'recent_logs.json');
+  fs.writeFileSync(
+    logsFile,
+    JSON.stringify(
+      {
+        container_runs: containerRuns,
+        task_runs: taskRunLogs,
+        generated_at: new Date().toISOString(),
+      },
+      null,
+      2,
+    ),
+  );
+}

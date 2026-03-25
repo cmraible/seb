@@ -26,6 +26,7 @@ import {
   ContainerOutput,
   runContainerAgent,
   writeGroupsSnapshot,
+  writeLogsSnapshot,
   writeTasksSnapshot,
 } from './container-runner.js';
 import { PROXY_BIND_HOST } from './container-runtime.js';
@@ -37,6 +38,7 @@ import {
   getAllTasks,
   getMessagesSince,
   getNewMessages,
+  getRecentTaskRunLogs,
   getRegisteredGroup,
   getRouterState,
   initDatabase,
@@ -376,6 +378,15 @@ async function runAgent(
     isMain,
     availableGroups,
     new Set(Object.keys(registeredGroups)),
+  );
+
+  // Update recent logs snapshot for container to read
+  const taskRunLogs = getRecentTaskRunLogs(isMain ? null : group.folder, 20);
+  writeLogsSnapshot(
+    group.folder,
+    isMain,
+    taskRunLogs,
+    Object.values(registeredGroups).map((g) => g.folder),
   );
 
   // Wrap onOutput to track session ID from streamed results

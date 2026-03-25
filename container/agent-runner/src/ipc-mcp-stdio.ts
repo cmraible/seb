@@ -191,6 +191,69 @@ server.tool(
 );
 
 server.tool(
+  'get_logs',
+  `View recent execution logs for this group. Returns container run logs (duration, exit code, errors) and scheduled task run logs (status, errors).
+
+From main: shows logs from all groups. From other groups: shows only this group's logs.`,
+  {
+    type: z.enum(['all', 'container', 'task']).default('all').describe('Filter by log type: all, container (execution logs), or task (scheduled task runs)'),
+    limit: z.number().default(10).describe('Maximum number of entries to return per type'),
+    task_id: z.string().optional().describe('Filter task run logs to a specific task ID'),
+  },
+  async (args) => {
+    const logsFile = path.join(IPC_DIR, 'recent_logs.json');
+
+    try {
+      if (!fs.existsSync(logsFile)) {
+        return { content: [{ type: 'text' as const, text: 'No logs available yet.' }] };
+      }
+
+      const data = JSON.parse(fs.readFileSync(logsFile, 'utf-8'));
+      const parts: string[] = [];
+
+      if (args.type === 'all' || args.type === 'container') {
+        const runs = (data.container_runs || []).slice(0, args.limit);
+        if (runs.length > 0) {
+          parts.push('=== Container Runs ===');
+          for (const r of runs) {
+            const status = r.exit_code === 0 ? 'OK' : `EXIT ${r.exit_code}`;
+            const err = r.stderr_preview ? ` | ${r.stderr_preview}` : '';
+            parts.push(`- [${status}] ${r.timestamp} (${r.duration_ms}ms) group=${r.group}${err}`);
+          }
+        } else {
+          parts.push('=== Container Runs ===\nNo container run logs found.');
+        }
+      }
+
+      if (args.type === 'all' || args.type === 'task') {
+        let taskRuns = data.task_runs || [];
+        if (args.task_id) {
+          taskRuns = taskRuns.filter((t: { task_id: string }) => t.task_id === args.task_id);
+        }
+        taskRuns = taskRuns.slice(0, args.limit);
+
+        if (parts.length > 0) parts.push('');
+        if (taskRuns.length > 0) {
+          parts.push('=== Task Runs ===');
+          for (const t of taskRuns) {
+            const err = t.error ? ` | ${t.error}` : '';
+            parts.push(`- [${t.status}] ${t.run_at} task=${t.task_id} (${t.duration_ms}ms)${err}`);
+          }
+        } else {
+          parts.push('=== Task Runs ===\nNo task run logs found.');
+        }
+      }
+
+      return { content: [{ type: 'text' as const, text: parts.join('\n') }] };
+    } catch (err) {
+      return {
+        content: [{ type: 'text' as const, text: `Error reading logs: ${err instanceof Error ? err.message : String(err)}` }],
+      };
+    }
+  },
+);
+
+server.tool(
   'pause_task',
   'Pause a scheduled task. It will not run until resumed.',
   { task_id: z.string().describe('The task ID to pause') },

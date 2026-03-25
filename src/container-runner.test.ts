@@ -52,6 +52,7 @@ vi.mock('./mount-security.js', () => ({
 
 // Create a controllable fake RuntimeInstance backed by EventEmitter + streams
 import { PassThrough } from 'stream';
+import fs from 'fs';
 import type { RuntimeInstance } from './runtime/runtime.js';
 
 function createFakeInstance(): RuntimeInstance & {
@@ -124,8 +125,13 @@ vi.mock('child_process', async () => {
   };
 });
 
-import { runContainerAgent, ContainerOutput } from './container-runner.js';
+import {
+  runContainerAgent,
+  ContainerOutput,
+  writeLogsSnapshot,
+} from './container-runner.js';
 import type { RegisteredGroup } from './types.js';
+import type { TaskRunLogEntry } from './container-runner.js';
 
 const testGroup: RegisteredGroup = {
   name: 'Test Group',
@@ -277,5 +283,196 @@ describe('container-runner timeout behavior', () => {
     const result = await resultPromise;
     expect(result.status).toBe('success');
     expect(result.newSessionId).toBe('session-456');
+  });
+});
+
+// --- writeLogsSnapshot ---
+
+describe('writeLogsSnapshot', () => {
+  const mockFs = vi.mocked(fs);
+
+  beforeEach(() => {
+    mockFs.mkdirSync.mockClear();
+    mockFs.writeFileSync.mockClear();
+    mockFs.existsSync.mockReturnValue(false);
+    (mockFs.readdirSync as ReturnType<typeof vi.fn>).mockReturnValue([]);
+  });
+
+  const sampleTaskLogs: TaskRunLogEntry[] = [
+    {
+      task_id: 'task-1',
+      run_at: '2024-06-01T00:00:00.000Z',
+      duration_ms: 100,
+      status: 'success',
+      error: null,
+      group_folder: 'test-group',
+    },
+  ];
+
+  it('creates IPC directory and writes snapshot file', () => {
+    writeLogsSnapshot('test-group', false, sampleTaskLogs, ['test-group']);
+
+    expect(mockFs.mkdirSync).toHaveBeenCalledWith(
+      expect.stringContaining('test-group'),
+      { recursive: true },
+    );
+    expect(mockFs.writeFileSync).toHaveBeenCalledOnce();
+
+    const writtenPath = vi.mocked(mockFs.writeFileSync).mock.calls[0][0];
+    expect(String(writtenPath)).toContain('recent_logs.json');
+  });
+
+  it('includes task_runs in snapshot JSON', () => {
+    writeLogsSnapshot('test-group', false, sampleTaskLogs, ['test-group']);
+
+    const writtenData = JSON.parse(
+      vi.mocked(mockFs.writeFileSync).mock.calls[0][1] as string,
+    );
+    expect(writtenData.task_runs).toHaveLength(1);
+    expect(writtenData.task_runs[0].task_id).toBe('task-1');
+    expect(writtenData.generated_at).toBeDefined();
+  });
+
+  it('returns empty container_runs when no log directory exists', () => {
+    vi.mocked(mockFs.existsSync).mockReturnValue(false);
+
+    writeLogsSnapshot('test-group', false, [], ['test-group']);
+
+    const writtenData = JSON.parse(
+      vi.mocked(mockFs.writeFileSync).mock.calls[0][1] as string,
+    );
+    expect(writtenData.container_runs).toHaveLength(0);
+  });
+
+  it('parses container log files when log directory exists', () => {
+    vi.mocked(mockFs.existsSync).mockReturnValue(true);
+    (mockFs.readdirSync as ReturnType<typeof vi.fn>).mockReturnValue([
+      'container-2024-06-01.log',
+    ]);
+    vi.mocked(mockFs.readFileSync).mockReturnValue(
+      [
+        'Timestamp: 2024-06-01T00:00:00.000Z',
+        'Duration: 1500',
+        'Exit Code: 0',
+        'Group: test-group',
+      ].join('\n'),
+    );
+
+    writeLogsSnapshot('test-group', false, [], ['test-group']);
+
+    const writtenData = JSON.parse(
+      vi.mocked(mockFs.writeFileSync).mock.calls[0][1] as string,
+    );
+    expect(writtenData.container_runs).toHaveLength(1);
+    expect(writtenData.container_runs[0]).toEqual({
+      timestamp: '2024-06-01T00:00:00.000Z',
+      duration_ms: 1500,
+      exit_code: 0,
+      group: 'test-group',
+      stderr_preview: null,
+    });
+  });
+
+  it('extracts stderr preview for non-zero exit codes', () => {
+    vi.mocked(mockFs.existsSync).mockReturnValue(true);
+    (mockFs.readdirSync as ReturnType<typeof vi.fn>).mockReturnValue([
+      'container-2024-06-01.log',
+    ]);
+    vi.mocked(mockFs.readFileSync).mockReturnValue(
+      [
+        'Timestamp: 2024-06-01T00:00:00.000Z',
+        'Duration: 500',
+        'Exit Code: 1',
+        'Group: test-group',
+        '=== Stderr ===',
+        'Error: something went wrong',
+        '=== End ===',
+      ].join('\n'),
+    );
+
+    writeLogsSnapshot('test-group', false, [], ['test-group']);
+
+    const writtenData = JSON.parse(
+      vi.mocked(mockFs.writeFileSync).mock.calls[0][1] as string,
+    );
+    expect(writtenData.container_runs[0].stderr_preview).toBe(
+      'Error: something went wrong',
+    );
+  });
+
+  it('does not extract stderr for zero exit codes', () => {
+    vi.mocked(mockFs.existsSync).mockReturnValue(true);
+    (mockFs.readdirSync as ReturnType<typeof vi.fn>).mockReturnValue([
+      'container-2024-06-01.log',
+    ]);
+    vi.mocked(mockFs.readFileSync).mockReturnValue(
+      [
+        'Timestamp: 2024-06-01T00:00:00.000Z',
+        'Duration: 500',
+        'Exit Code: 0',
+        'Group: test-group',
+        '=== Stderr ===',
+        'Some warning output',
+      ].join('\n'),
+    );
+
+    writeLogsSnapshot('test-group', false, [], ['test-group']);
+
+    const writtenData = JSON.parse(
+      vi.mocked(mockFs.writeFileSync).mock.calls[0][1] as string,
+    );
+    expect(writtenData.container_runs[0].stderr_preview).toBeNull();
+  });
+
+  it('main group aggregates logs from all groups', () => {
+    vi.mocked(mockFs.existsSync).mockReturnValue(true);
+
+    // Return different files per directory call
+    let callCount = 0;
+    (mockFs.readdirSync as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      callCount++;
+      return [`container-run-${callCount}.log`];
+    });
+
+    vi.mocked(mockFs.readFileSync).mockImplementation((filePath) => {
+      const p = String(filePath);
+      if (p.includes('run-1')) {
+        return 'Timestamp: 2024-06-01T00:01:00.000Z\nDuration: 100\nExit Code: 0\nGroup: group-a';
+      }
+      return 'Timestamp: 2024-06-01T00:02:00.000Z\nDuration: 200\nExit Code: 0\nGroup: group-b';
+    });
+
+    writeLogsSnapshot('main-group', true, [], ['group-a', 'group-b']);
+
+    const writtenData = JSON.parse(
+      vi.mocked(mockFs.writeFileSync).mock.calls[0][1] as string,
+    );
+    // Main group should see runs from both groups
+    expect(writtenData.container_runs).toHaveLength(2);
+    // Sorted by timestamp descending
+    expect(writtenData.container_runs[0].group).toBe('group-b');
+    expect(writtenData.container_runs[1].group).toBe('group-a');
+  });
+
+  it('non-main group sees only its own logs', () => {
+    vi.mocked(mockFs.existsSync).mockReturnValue(true);
+    vi.mocked(mockFs.readFileSync).mockReturnValue(
+      'Timestamp: 2024-06-01T00:00:00.000Z\nDuration: 100\nExit Code: 0\nGroup: my-group',
+    );
+
+    // Clear then set return value to count only calls from this invocation
+    (mockFs.readdirSync as ReturnType<typeof vi.fn>).mockClear();
+    (mockFs.readdirSync as ReturnType<typeof vi.fn>).mockReturnValue([
+      'container-2024-06-01.log',
+    ]);
+
+    writeLogsSnapshot('my-group', false, [], ['my-group', 'other-group']);
+
+    // readdirSync should only be called for my-group's logs dir, not other-group's
+    const readdirCalls = vi
+      .mocked(mockFs.readdirSync)
+      .mock.calls.map((c) => String(c[0]));
+    expect(readdirCalls).toHaveLength(1);
+    expect(readdirCalls[0]).toContain('my-group');
   });
 });

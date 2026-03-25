@@ -496,6 +496,45 @@ export function logTaskRun(log: TaskRunLog): void {
   );
 }
 
+export function getTaskRunLogs(taskId: string, limit = 10): TaskRunLog[] {
+  return db
+    .prepare(
+      `SELECT task_id, run_at, duration_ms, status, result, error
+       FROM task_run_logs
+       WHERE task_id = ?
+       ORDER BY run_at DESC
+       LIMIT ?`,
+    )
+    .all(taskId, limit) as TaskRunLog[];
+}
+
+export function getRecentTaskRunLogs(
+  groupFolder: string | null,
+  limit = 20,
+): (TaskRunLog & { group_folder: string })[] {
+  if (groupFolder) {
+    return db
+      .prepare(
+        `SELECT trl.task_id, trl.run_at, trl.duration_ms, trl.status, trl.result, trl.error, st.group_folder
+         FROM task_run_logs trl
+         JOIN scheduled_tasks st ON trl.task_id = st.id
+         WHERE st.group_folder = ?
+         ORDER BY trl.run_at DESC
+         LIMIT ?`,
+      )
+      .all(groupFolder, limit) as (TaskRunLog & { group_folder: string })[];
+  }
+  return db
+    .prepare(
+      `SELECT trl.task_id, trl.run_at, trl.duration_ms, trl.status, trl.result, trl.error, st.group_folder
+       FROM task_run_logs trl
+       JOIN scheduled_tasks st ON trl.task_id = st.id
+       ORDER BY trl.run_at DESC
+       LIMIT ?`,
+    )
+    .all(limit) as (TaskRunLog & { group_folder: string })[];
+}
+
 // --- Router state accessors ---
 
 export function getRouterState(key: string): string | undefined {
