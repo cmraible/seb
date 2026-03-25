@@ -1032,6 +1032,142 @@ describe('GitHubChannel bot username bypass', () => {
       }),
     );
   });
+
+  it('registers issue assigned to bot with requiresTrigger false', async () => {
+    opts = createTestOpts();
+    channel = new GitHubChannel(
+      SECRET,
+      'test-token',
+      [],
+      opts,
+      'seb-writes-code',
+    );
+    await channel.connect();
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
+
+    await sendWebhook(port, {
+      event: 'issues',
+      secret: SECRET,
+      payload: {
+        action: 'assigned',
+        repository: { full_name: 'cmraible/seb' },
+        issue: {
+          number: 50,
+          title: 'Implement feature X',
+          html_url: 'https://github.com/cmraible/seb/issues/50',
+          user: { login: 'alice' },
+        },
+        assignee: { login: 'seb-writes-code' },
+        sender: { login: 'alice' },
+      },
+    });
+
+    expect(opts.registerGroup).toHaveBeenCalledWith(
+      'gh:cmraible/seb#50',
+      expect.objectContaining({
+        requiresTrigger: false,
+      }),
+    );
+    expect(opts.onMessage).toHaveBeenCalledWith(
+      'gh:cmraible/seb#50',
+      expect.objectContaining({
+        content: expect.stringContaining(
+          'Issue #50 "Implement feature X" assigned to seb-writes-code',
+        ),
+      }),
+    );
+  });
+
+  it('updates requiresTrigger when bot is assigned to existing issue group', async () => {
+    const registeredGroups: Record<string, any> = {
+      'gh:cmraible/seb#60': {
+        name: 'cmraible/seb#60',
+        folder: 'github_cmraible-seb-60',
+        trigger: '@seb-writes-code',
+        added_at: '2024-01-01T00:00:00.000Z',
+        requiresTrigger: true,
+      },
+    };
+    opts = createTestOpts({
+      registeredGroups: vi.fn(() => registeredGroups),
+    });
+    channel = new GitHubChannel(
+      SECRET,
+      'test-token',
+      [],
+      opts,
+      'seb-writes-code',
+    );
+    await channel.connect();
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
+
+    await sendWebhook(port, {
+      event: 'issues',
+      secret: SECRET,
+      payload: {
+        action: 'assigned',
+        repository: { full_name: 'cmraible/seb' },
+        issue: {
+          number: 60,
+          title: 'Fix bug',
+          html_url: 'https://github.com/cmraible/seb/issues/60',
+          user: { login: 'alice' },
+        },
+        assignee: { login: 'seb-writes-code' },
+        sender: { login: 'alice' },
+      },
+    });
+
+    expect(opts.registerGroup).toHaveBeenCalledWith(
+      'gh:cmraible/seb#60',
+      expect.objectContaining({
+        requiresTrigger: false,
+      }),
+    );
+  });
+
+  it('does not skip trigger when issue is assigned to someone else', async () => {
+    opts = createTestOpts();
+    channel = new GitHubChannel(
+      SECRET,
+      'test-token',
+      [],
+      opts,
+      'seb-writes-code',
+    );
+    await channel.connect();
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
+
+    await sendWebhook(port, {
+      event: 'issues',
+      secret: SECRET,
+      payload: {
+        action: 'assigned',
+        repository: { full_name: 'cmraible/seb' },
+        issue: {
+          number: 70,
+          title: 'Another issue',
+          html_url: 'https://github.com/cmraible/seb/issues/70',
+          user: { login: 'alice' },
+        },
+        assignee: { login: 'bob' },
+        sender: { login: 'alice' },
+      },
+    });
+
+    expect(opts.registerGroup).toHaveBeenCalledWith(
+      'gh:cmraible/seb#70',
+      expect.objectContaining({
+        requiresTrigger: true,
+      }),
+    );
+  });
 });
 
 // --- Sender allowlist tests (separate describe with its own channel) ---
