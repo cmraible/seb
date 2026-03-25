@@ -17,10 +17,20 @@ fi
 UNIT_DIR="${HOME}/.config/systemd/user"
 mkdir -p "$UNIT_DIR"
 
-# Build ExecStart with optional password
+# Build ExecStart — password is passed via EnvironmentFile, not the command line
 EXEC_START="${LOGDY_BIN} follow ${PROJECT_ROOT}/logs/nanoclaw.json.log --port ${PORT}"
+
+# Write environment file for sensitive config
+ENV_FILE="${PROJECT_ROOT}/.logdy-env"
+ENV_FILE_LINE=""
 if [ -n "$PASSWORD" ]; then
-  EXEC_START="${EXEC_START} --ui-pass ${PASSWORD}"
+  echo "LOGDY_PASS=${PASSWORD}" > "$ENV_FILE"
+  chmod 600 "$ENV_FILE"
+  EXEC_START="${EXEC_START} --ui-pass \${LOGDY_PASS}"
+  ENV_FILE_LINE="EnvironmentFile=${ENV_FILE}"
+else
+  # Remove stale env file if no password provided
+  rm -f "$ENV_FILE"
 fi
 
 cat > "${UNIT_DIR}/logdy.service" <<EOF
@@ -30,6 +40,7 @@ After=network.target nanoclaw.service
 
 [Service]
 Type=simple
+${ENV_FILE_LINE:+${ENV_FILE_LINE}}
 ExecStart=${EXEC_START}
 WorkingDirectory=${PROJECT_ROOT}
 Restart=always
