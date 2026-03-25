@@ -63,7 +63,11 @@ import {
   updateTask,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
-import { writeGroupTemplate, resolveGroupFolderPath } from './group-folder.js';
+import {
+  writeGroupTemplate,
+  resolveGroupFolderPath,
+  resolveGroupIpcPath,
+} from './group-folder.js';
 import { initBotPool } from './channels/telegram.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
@@ -273,6 +277,18 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
+  // Clear any leftover send_message flag from a previous turn
+  const sendMessageFlagPath = path.join(
+    resolveGroupIpcPath(group.folder),
+    'flags',
+    'send_message_called',
+  );
+  try {
+    fs.unlinkSync(sendMessageFlagPath);
+  } catch {
+    // Flag doesn't exist — expected
+  }
+
   const output = await runAgent(
     group,
     prompt,
@@ -313,8 +329,23 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
         logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
         if (text) {
-          await channel.sendMessage(chatJid, text);
-          outputSentToUser = true;
+          // If the agent already sent messages via send_message, suppress the
+          // final output to avoid duplicate messages (see #165).
+          const flagPath = path.join(
+            resolveGroupIpcPath(group.folder),
+            'flags',
+            'send_message_called',
+          );
+          if (fs.existsSync(flagPath)) {
+            logger.info(
+              { group: group.name },
+              'Suppressing agent output — send_message was already called',
+            );
+            outputSentToUser = true; // Still mark as sent to prevent cursor rollback
+          } else {
+            await channel.sendMessage(chatJid, text);
+            outputSentToUser = true;
+          }
         }
         // Only reset idle timer on actual results, not session-update markers (result: null)
         resetIdleTimer();

@@ -16,7 +16,8 @@ import {
   updateTaskAfterRun,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
-import { resolveGroupFolderPath } from './group-folder.js';
+import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
+import path from 'path';
 import { logger } from './logger.js';
 import type { RuntimeInstance } from './runtime/runtime.js';
 import { RegisteredGroup, ScheduledTask } from './types.js';
@@ -183,6 +184,18 @@ async function runTask(
     }, TASK_CLOSE_DELAY_MS);
   };
 
+  // Clear any leftover send_message flag from a previous turn
+  const sendMessageFlagPath = path.join(
+    resolveGroupIpcPath(task.group_folder),
+    'flags',
+    'send_message_called',
+  );
+  try {
+    fs.unlinkSync(sendMessageFlagPath);
+  } catch {
+    // Flag doesn't exist — expected
+  }
+
   try {
     const output = await runContainerAgent(
       group,
@@ -205,16 +218,25 @@ async function runTask(
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
           result = streamedOutput.result;
-          // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-          const raw =
-            typeof streamedOutput.result === 'string'
-              ? streamedOutput.result
-              : JSON.stringify(streamedOutput.result);
-          const text = raw
-            .replace(/<internal>[\s\S]*?<\/internal>/g, '')
-            .trim();
-          if (text) {
-            await deps.sendMessage(task.chat_jid, text);
+          // If the agent already sent messages via send_message, suppress the
+          // final output to avoid duplicate messages (see #165).
+          if (fs.existsSync(sendMessageFlagPath)) {
+            logger.info(
+              { taskId: task.id },
+              'Suppressing task output — send_message was already called',
+            );
+          } else {
+            // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
+            const raw =
+              typeof streamedOutput.result === 'string'
+                ? streamedOutput.result
+                : JSON.stringify(streamedOutput.result);
+            const text = raw
+              .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+              .trim();
+            if (text) {
+              await deps.sendMessage(task.chat_jid, text);
+            }
           }
           scheduleClose();
         }
