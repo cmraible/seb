@@ -7,10 +7,13 @@ import {
   deleteTask,
   getAllChats,
   getAllRegisteredGroups,
+  getRecentTaskRunLogs,
   getRegisteredGroup,
   getMessagesSince,
   getNewMessages,
   getTaskById,
+  getTaskRunLogs,
+  logTaskRun,
   recoverRunningTasks,
   setRegisteredGroup,
   storeChatMetadata,
@@ -608,5 +611,169 @@ describe('recoverRunningTasks', () => {
 
     const count = recoverRunningTasks();
     expect(count).toBe(0);
+  });
+});
+
+// --- getTaskRunLogs ---
+
+describe('getTaskRunLogs', () => {
+  beforeEach(() => {
+    createTask({
+      id: 'task-log-1',
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      prompt: 'test task',
+      schedule_type: 'cron',
+      schedule_value: '*/5 * * * *',
+      context_mode: 'isolated',
+      next_run: '2024-06-01T00:05:00.000Z',
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    logTaskRun({
+      task_id: 'task-log-1',
+      run_at: '2024-06-01T00:00:00.000Z',
+      duration_ms: 1200,
+      status: 'success',
+      result: 'ok',
+      error: null,
+    });
+    logTaskRun({
+      task_id: 'task-log-1',
+      run_at: '2024-06-01T00:05:00.000Z',
+      duration_ms: 800,
+      status: 'error',
+      result: null,
+      error: 'timeout',
+    });
+    logTaskRun({
+      task_id: 'task-log-1',
+      run_at: '2024-06-01T00:10:00.000Z',
+      duration_ms: 500,
+      status: 'success',
+      result: 'done',
+      error: null,
+    });
+  });
+
+  it('returns logs for a specific task ordered by most recent first', () => {
+    const logs = getTaskRunLogs('task-log-1');
+    expect(logs).toHaveLength(3);
+    expect(logs[0].run_at).toBe('2024-06-01T00:10:00.000Z');
+    expect(logs[2].run_at).toBe('2024-06-01T00:00:00.000Z');
+  });
+
+  it('respects the limit parameter', () => {
+    const logs = getTaskRunLogs('task-log-1', 2);
+    expect(logs).toHaveLength(2);
+    expect(logs[0].run_at).toBe('2024-06-01T00:10:00.000Z');
+  });
+
+  it('returns empty array for unknown task', () => {
+    const logs = getTaskRunLogs('nonexistent');
+    expect(logs).toHaveLength(0);
+  });
+
+  it('returns correct fields', () => {
+    const logs = getTaskRunLogs('task-log-1', 1);
+    expect(logs[0]).toEqual({
+      task_id: 'task-log-1',
+      run_at: '2024-06-01T00:10:00.000Z',
+      duration_ms: 500,
+      status: 'success',
+      result: 'done',
+      error: null,
+    });
+  });
+});
+
+// --- getRecentTaskRunLogs ---
+
+describe('getRecentTaskRunLogs', () => {
+  beforeEach(() => {
+    createTask({
+      id: 'task-a',
+      group_folder: 'whatsapp_group-a',
+      chat_jid: 'a@g.us',
+      prompt: 'task a',
+      schedule_type: 'cron',
+      schedule_value: '*/5 * * * *',
+      context_mode: 'isolated',
+      next_run: '2024-06-01T00:05:00.000Z',
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    createTask({
+      id: 'task-b',
+      group_folder: 'whatsapp_group-b',
+      chat_jid: 'b@g.us',
+      prompt: 'task b',
+      schedule_type: 'cron',
+      schedule_value: '*/10 * * * *',
+      context_mode: 'isolated',
+      next_run: '2024-06-01T00:10:00.000Z',
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    logTaskRun({
+      task_id: 'task-a',
+      run_at: '2024-06-01T00:00:00.000Z',
+      duration_ms: 100,
+      status: 'success',
+      result: 'ok',
+      error: null,
+    });
+    logTaskRun({
+      task_id: 'task-b',
+      run_at: '2024-06-01T00:01:00.000Z',
+      duration_ms: 200,
+      status: 'success',
+      result: 'ok',
+      error: null,
+    });
+    logTaskRun({
+      task_id: 'task-a',
+      run_at: '2024-06-01T00:05:00.000Z',
+      duration_ms: 150,
+      status: 'error',
+      result: null,
+      error: 'fail',
+    });
+  });
+
+  it('returns all logs across groups when groupFolder is null', () => {
+    const logs = getRecentTaskRunLogs(null);
+    expect(logs).toHaveLength(3);
+    // Most recent first
+    expect(logs[0].task_id).toBe('task-a');
+    expect(logs[0].run_at).toBe('2024-06-01T00:05:00.000Z');
+  });
+
+  it('includes group_folder field from joined scheduled_tasks', () => {
+    const logs = getRecentTaskRunLogs(null);
+    const taskALog = logs.find((l) => l.run_at === '2024-06-01T00:00:00.000Z');
+    expect(taskALog!.group_folder).toBe('whatsapp_group-a');
+
+    const taskBLog = logs.find((l) => l.task_id === 'task-b');
+    expect(taskBLog!.group_folder).toBe('whatsapp_group-b');
+  });
+
+  it('filters to a specific group when groupFolder is provided', () => {
+    const logs = getRecentTaskRunLogs('whatsapp_group-a');
+    expect(logs).toHaveLength(2);
+    expect(logs.every((l) => l.group_folder === 'whatsapp_group-a')).toBe(true);
+  });
+
+  it('returns empty for group with no logs', () => {
+    const logs = getRecentTaskRunLogs('whatsapp_nonexistent');
+    expect(logs).toHaveLength(0);
+  });
+
+  it('respects the limit parameter', () => {
+    const logs = getRecentTaskRunLogs(null, 2);
+    expect(logs).toHaveLength(2);
   });
 });
