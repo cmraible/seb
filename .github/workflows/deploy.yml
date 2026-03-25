@@ -54,6 +54,16 @@ jobs:
           systemctl --user restart nanoclaw
           echo "Restarted via systemctl --user"
 
+      - name: Restart Logdy (if installed)
+        continue-on-error: true
+        run: |
+          if systemctl --user is-enabled logdy 2>/dev/null; then
+            systemctl --user restart logdy
+            echo "Restarted logdy"
+          else
+            echo "logdy service not installed, skipping"
+          fi
+
       - name: Verify service is running
         run: |
           sleep 5
