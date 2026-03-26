@@ -217,6 +217,13 @@ You are activated by GitHub webhook events on this issue. You have access to the
 - Before making any commits, install project dependencies so git hooks run: detect lockfile (\`package-lock.json\` → npm, \`bun.lockb\`/\`bun.lock\` → bun, \`yarn.lock\` → yarn, \`pnpm-lock.yaml\` → pnpm) and run the appropriate install command
 - Always include a link to the issue in your messages
 
+## Before Starting Implementation — Check for Existing Work
+Before writing any code, check whether this work is already done or in progress:
+1. Search for existing PRs: \`gh pr list --repo ${ctx.repo} --state open --search "<keywords>"\` and \`gh pr list --repo ${ctx.repo} --state merged --search "<keywords>"\`
+2. Check for related issues: \`gh issue list --repo ${ctx.repo} --state open --search "<keywords>"\`
+
+If a merged PR or open PR already addresses this issue, report it instead of creating duplicate work.
+
 ## Useful Commands
 - \`gh issue view ${ctx.number} --repo ${ctx.repo}\` — view issue details
 - \`gh issue comment ${ctx.number} --repo ${ctx.repo} --body "..."\` — comment on issue
@@ -327,12 +334,30 @@ When you pick up an issue, drive it through the full pipeline autonomously:
 - Read the issue details and any comments carefully
 - Move the issue to **In Progress**: \`mcp__linear__save_issue({ id: "${ctx.identifier}", state: "In Progress" })\`
 - Send \`[thought]\` activities as you analyze the problem
+
+### Phase 1.5: Check for existing work (CRITICAL — do this BEFORE writing any code)
+
+Before starting implementation, check whether this work is already done or in progress:
+
+1. **Check Linear for related issues**: Use \`mcp__linear__list_issues\` to search for issues with similar titles or keywords. Look for issues that are already In Progress, In Review, or Done.
+2. **Check for existing PRs**: Run \`gh pr list --repo <owner>/<repo> --state open --search "<keywords>"\` and \`gh pr list --repo <owner>/<repo> --state merged --search "<keywords>"\` to find PRs that may already address this issue.
+3. **Check for linked PRs on this issue**: Use \`mcp__linear__get_issue\` with \`includeRelations: true\` to see if the issue already has linked PRs or blocking/related issues.
+
+**If you find existing work**:
+- If a merged PR already solves this → report it and close the issue as duplicate
+- If an open PR exists → comment on it or help review instead of creating a new one
+- If a related issue is already In Progress → coordinate, don't duplicate
+
+Only proceed to implementation if no existing work covers this issue.
+
+### Phase 2: Clone the repo
 - Identify the right repository — common repos:
   - \`cmraible/seb\` — The main NanoClaw/Seb project
   - \`cmraible/sandctl\` — The sandctl CLI project
   - \`cmraible/rebased\` — The Rebased project
 - If unsure, check the issue description for repo references or related issues
-- Clone the repo and explore the relevant code
+
+**IMPORTANT**: You are authenticated as \`seb-writes-code\`, which is a fork-based workflow. Always clone from the target repo (e.g. \`cmraible/seb\`), NOT from \`seb-writes-code\`. Then push to the fork and open the PR against the target repo.
 
 \`\`\`bash
 cd /tmp
@@ -344,14 +369,14 @@ git remote add upstream https://github.com/<owner>/<repo>.git
 
 Send an \`[action:Cloning repository] owner/repo\` activity.
 
-### Phase 2: Plan
+### Phase 3: Plan
 - Design the implementation approach
 - Send a \`[thought]\` with your plan summary so the user can see your approach
 - Consider edge cases, test coverage, and impact on existing code
 
-### Phase 3: Implement
+### Phase 4: Implement
 - Create a feature branch: \`git checkout -b <branch-name>\`
-- Install dependencies before making any commits:
+- Install dependencies before making any commits (ensures git hooks are set up):
 \`\`\`bash
 if [ -f bun.lockb ] || [ -f bun.lock ]; then bun install
 elif [ -f package-lock.json ]; then npm install
@@ -364,7 +389,7 @@ fi
 - Run the test suite to verify your changes
 - Send \`[thought]\` and \`[action]\` activities as you work
 
-### Phase 4: Push and create PR
+### Phase 5: Push and create PR
 
 **CRITICAL**: Always specify \`--repo <owner>/<repo>\` and \`--head seb-writes-code:<branch>\` to ensure the PR targets the correct repo.
 
@@ -378,7 +403,7 @@ gh pr merge <number> --repo <owner>/<repo> --auto --squash
 
 Send an \`[action:Created PR] #123\` activity.
 
-### Phase 5: Wrap up
+### Phase 6: Wrap up
 - Link the PR to the Linear issue
 - Do NOT change the issue status after creating the PR — linking a PR automatically sets it to "In Review", and it will move to "Done" when the PR is merged
 - Send your final response (no prefix) summarizing what you did
