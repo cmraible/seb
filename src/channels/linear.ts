@@ -373,6 +373,8 @@ export class LinearChannel implements Channel {
   private tokenFetchedAt: number = 0;
   /** Refresh token for user OAuth flow */
   private refreshToken: string | null = null;
+  /** In-flight token refresh promise — prevents concurrent refresh calls from racing */
+  private tokenRefreshPromise: Promise<string | null> | null = null;
   /** Linear user ID of the bot — issues assigned to this user skip the trigger */
   private botUserId: string;
   /** If set, only process events from these Linear team keys */
@@ -443,6 +445,7 @@ export class LinearChannel implements Channel {
 
   /**
    * Get a valid Linear API access token, fetching or refreshing as needed.
+   * Deduplicates concurrent calls to prevent refresh token race conditions.
    */
   private async getAccessToken(): Promise<string | null> {
     if (!this.clientId || !this.clientSecret) return null;
@@ -452,7 +455,25 @@ export class LinearChannel implements Channel {
       return this.accessToken;
     }
 
-    // Token is stale or missing — try refreshing the user OAuth token first
+    // If a refresh is already in-flight, reuse its promise instead of
+    // issuing a second concurrent refresh (which would revoke the first
+    // refresh token and fail with invalid_grant).
+    if (this.tokenRefreshPromise) {
+      return this.tokenRefreshPromise;
+    }
+
+    this.tokenRefreshPromise = this.refreshAccessToken().finally(() => {
+      this.tokenRefreshPromise = null;
+    });
+    return this.tokenRefreshPromise;
+  }
+
+  /**
+   * Internal: perform the actual token refresh or client credentials fetch.
+   * Only called from getAccessToken() which ensures single-flight.
+   */
+  private async refreshAccessToken(): Promise<string | null> {
+    // Try refreshing the user OAuth token first
     if (this.refreshToken) {
       try {
         const refreshed = await refreshLinearOAuthToken(
