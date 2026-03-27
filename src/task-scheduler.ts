@@ -18,7 +18,7 @@ import {
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { logger } from './logger.js';
-import type { RuntimeInstance } from './runtime/runtime.js';
+import { ChildProcess } from 'child_process';
 import { RegisteredGroup, ScheduledTask } from './types.js';
 
 /**
@@ -81,7 +81,7 @@ export interface SchedulerDependencies {
   queue: GroupQueue;
   onProcess: (
     groupJid: string,
-    instance: RuntimeInstance,
+    instance: ChildProcess,
     containerName: string,
     groupFolder: string,
   ) => void;
@@ -154,6 +154,7 @@ async function runTask(
       id: t.id,
       groupFolder: t.group_folder,
       prompt: t.prompt,
+      script: t.script,
       schedule_type: t.schedule_type,
       schedule_value: t.schedule_value,
       status: t.status,
@@ -194,6 +195,7 @@ async function runTask(
         isMain,
         isScheduledTask: true,
         assistantName: ASSISTANT_NAME,
+        script: task.script || undefined,
       },
       (instance, containerName) =>
         deps.onProcess(

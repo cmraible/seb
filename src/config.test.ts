@@ -73,52 +73,52 @@ describe('escapeRegex', () => {
 
 describe('buildTriggerPattern', () => {
   it('matches @Name at start of message', () => {
-    const pat = buildTriggerPattern('Andy');
+    const pat = buildTriggerPattern('@Andy');
     expect(pat.test('@Andy hello')).toBe(true);
   });
 
   it('is case-insensitive', () => {
-    const pat = buildTriggerPattern('Andy');
+    const pat = buildTriggerPattern('@Andy');
     expect(pat.test('@andy hello')).toBe(true);
     expect(pat.test('@ANDY hello')).toBe(true);
   });
 
   it('requires word boundary after name', () => {
-    const pat = buildTriggerPattern('Andy');
+    const pat = buildTriggerPattern('@Andy');
     expect(pat.test('@Andyextra')).toBe(false);
   });
 
   it('does not match name mid-message', () => {
-    const pat = buildTriggerPattern('Andy');
+    const pat = buildTriggerPattern('@Andy');
     expect(pat.test('hey @Andy')).toBe(false);
   });
 
   it('matches name alone with no trailing text', () => {
-    const pat = buildTriggerPattern('Andy');
+    const pat = buildTriggerPattern('@Andy');
     expect(pat.test('@Andy')).toBe(true);
   });
 
   it('handles names with dots — requires literal dot', () => {
-    const pat = buildTriggerPattern('Mr.Bot');
+    const pat = buildTriggerPattern('@Mr.Bot');
     expect(pat.test('@Mr.Bot hello')).toBe(true);
     // Without escaping, "." would match any char — verify it requires literal dot
     expect(pat.test('@MrXBot hello')).toBe(false);
   });
 
   it('handles names with plus signs', () => {
-    const pat = buildTriggerPattern('C++Bot');
+    const pat = buildTriggerPattern('@C++Bot');
     expect(pat.test('@C++Bot hello')).toBe(true);
     expect(pat.test('@CBot hello')).toBe(false);
   });
 
   it('handles names with spaces', () => {
-    const pat = buildTriggerPattern('My Bot');
+    const pat = buildTriggerPattern('@My Bot');
     expect(pat.test('@My Bot hello')).toBe(true);
     expect(pat.test('@My Botx')).toBe(false);
   });
 
   it('handles single character names', () => {
-    const pat = buildTriggerPattern('X');
+    const pat = buildTriggerPattern('@X');
     expect(pat.test('@X hello')).toBe(true);
     expect(pat.test('@Xtra')).toBe(false);
   });

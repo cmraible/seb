@@ -4,7 +4,7 @@ import path from 'path';
 import { MAX_CONCURRENT_CONTAINERS } from './config.js';
 import { resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
-import type { RuntimeInstance } from './runtime/runtime.js';
+import { ChildProcess } from 'child_process';
 
 interface QueuedTask {
   id: string;
@@ -22,7 +22,7 @@ interface GroupState {
   runningTaskId: string | null;
   pendingMessages: boolean;
   pendingTasks: QueuedTask[];
-  process: RuntimeInstance | null;
+  process: ChildProcess | null;
   containerName: string | null;
   groupFolder: string | null;
   retryCount: number;
@@ -132,7 +132,7 @@ export class GroupQueue {
 
   registerProcess(
     groupJid: string,
-    instance: RuntimeInstance,
+    instance: ChildProcess,
     containerName: string,
     groupFolder?: string,
   ): void {
@@ -359,8 +359,8 @@ export class GroupQueue {
     // via idle timeout or container timeout. The --rm flag cleans them up on exit.
     // This prevents WhatsApp reconnection restarts from killing working agents.
     const activeContainers: string[] = [];
-    for (const [, state] of this.groups) {
-      if (state.process && state.containerName) {
+    for (const [_jid, state] of this.groups) {
+      if (state.process && !state.process.killed && state.containerName) {
         activeContainers.push(state.containerName);
       }
     }
