@@ -152,33 +152,37 @@ export class TelegramChannel implements Channel {
         jidToName.set(jid, group.name);
       }
 
-      const lines: string[] = ['📋 *Scheduled Tasks*\n'];
+      const lines: string[] = ['📋 *Scheduled Tasks*'];
       const keyboard = new InlineKeyboard();
 
       for (let i = 0; i < tasks.length; i++) {
         const t = tasks[i];
         const num = i + 1;
+        // Extract a meaningful summary: first line of the prompt, trimmed
+        const firstLine = t.prompt.split('\n')[0].trim();
         const preview =
-          t.prompt.length > 80 ? t.prompt.slice(0, 77) + '...' : t.prompt;
+          firstLine.length > 100 ? firstLine.slice(0, 97) + '...' : firstLine;
         const schedule = formatSchedule(t.schedule_type, t.schedule_value);
         const nextRun = formatNextRun(t.next_run);
         const groupName = jidToName.get(t.chat_jid);
 
-        let line = `*${num}.* ${preview}\n    ⏰ ${schedule}`;
+        let line = `*${num}.* ${preview}`;
+        line += `\n    ${schedule}`;
         if (nextRun) line += ` (next: ${nextRun})`;
+        line += ` · ${t.status}`;
         if (groupName) line += `\n    📍 ${groupName}`;
-        if (t.status === 'running') line += '\n    🔄 Running';
-        if (t.status === 'paused') line += '\n    ⏸ Paused';
         lines.push(line);
 
-        // Pause/resume button depending on status
-        if (t.status === 'paused') {
-          keyboard.text(`▶ ${num}`, `resume_task:${t.id}`);
-        } else {
-          keyboard.text(`⏸ ${num}`, `pause_task:${t.id}`);
+        // Only show action buttons for non-completed tasks
+        if (t.status !== 'completed') {
+          if (t.status === 'paused') {
+            keyboard.text(`▶ ${num}`, `resume_task:${t.id}`);
+          } else {
+            keyboard.text(`⏸ ${num}`, `pause_task:${t.id}`);
+          }
+          keyboard.text(`✕ ${num}`, `cancel_task:${t.id}`);
+          keyboard.row();
         }
-        keyboard.text(`✕ ${num}`, `cancel_task:${t.id}`);
-        keyboard.row();
       }
 
       ctx.reply(lines.join('\n\n'), {

@@ -762,6 +762,9 @@ async function main(): Promise<void> {
     getActiveTasks: () =>
       getAllTasks().filter(
         (t) =>
+          // Show all recurring tasks (cron/interval) regardless of status,
+          // but hide completed one-shot tasks to avoid clutter
+          t.schedule_type !== 'once' ||
           t.status === 'active' ||
           t.status === 'running' ||
           t.status === 'paused',
