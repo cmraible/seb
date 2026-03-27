@@ -566,6 +566,21 @@ async function startMessageLoop(): Promise<void> {
             allPending.length > 0 ? allPending : groupMessages;
           const formatted = formatMessages(messagesToSend, TIMEZONE);
 
+          // Clear send_message flag before piping — each turn starts fresh.
+          // processGroupMessages clears this for new containers, but the
+          // piping path bypasses that function entirely.
+          try {
+            fs.unlinkSync(
+              path.join(
+                resolveGroupIpcPath(group.folder),
+                'flags',
+                'send_message_called',
+              ),
+            );
+          } catch {
+            // Flag doesn't exist — expected
+          }
+
           if (queue.sendMessage(chatJid, formatted)) {
             logger.debug(
               { chatJid, count: messagesToSend.length },
