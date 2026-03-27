@@ -169,7 +169,7 @@ export class TelegramChannel implements Channel {
         let line = `*${num}.* ${preview}`;
         line += `\n    ${schedule}`;
         if (nextRun) line += ` (next: ${nextRun})`;
-        line += ` · _${t.status}_`;
+        line += ` · ${t.status}`;
         if (groupName) line += `\n    📍 ${groupName}`;
         lines.push(line);
 
