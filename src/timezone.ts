@@ -1,27 +1,37 @@
 /**
+ * Check whether a timezone string is a valid IANA identifier
+ * that Intl.DateTimeFormat can use.
+ */
+export function isValidTimezone(tz: string): boolean {
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Return the given timezone if valid IANA, otherwise fall back to UTC.
+ */
+export function resolveTimezone(tz: string): string {
+  return isValidTimezone(tz) ? tz : 'UTC';
+}
+
+/**
  * Convert a UTC ISO timestamp to a localized display string.
  * Uses the Intl API (no external dependencies).
- *
- * Returns a fallback string if the timestamp or timezone is invalid,
- * rather than silently producing "Invalid Date" or throwing.
+ * Falls back to UTC if the timezone is invalid.
  */
 export function formatLocalTime(utcIso: string, timezone: string): string {
   const date = new Date(utcIso);
-  if (isNaN(date.getTime())) {
-    return utcIso || 'unknown time';
-  }
-  try {
-    return date.toLocaleString('en-US', {
-      timeZone: timezone,
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-    });
-  } catch {
-    // Invalid timezone — fall back to UTC ISO string
-    return date.toISOString();
-  }
+  return date.toLocaleString('en-US', {
+    timeZone: resolveTimezone(timezone),
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
 }

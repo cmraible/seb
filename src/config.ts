@@ -1,17 +1,19 @@
 import path from 'path';
 
 import { parseIntEnv, readEnvFile } from './env.js';
+import { isValidTimezone } from './timezone.js';
 
 // Read config values from .env (falls back to process.env).
 // Secrets (API keys, tokens) are NOT read here — they are loaded only
 // by the credential proxy (credential-proxy.ts), never exposed to containers.
-// TELEGRAM_BOT_TOKEN and TELEGRAM_ONLY are host-side config used by the
+// TELEGRAM_BOT_TOKEN and TELEGRAM_BOT_POOL are host-side config used by the
 // Telegram channel, not secrets passed to containers.
 const envConfig = readEnvFile([
   'ASSISTANT_NAME',
   'ASSISTANT_HAS_OWN_NUMBER',
+  'ONECLI_URL',
+  'TZ',
   'TELEGRAM_BOT_TOKEN',
-  'TELEGRAM_ONLY',
   'TELEGRAM_BOT_POOL',
 ]);
 
@@ -51,10 +53,8 @@ export const CONTAINER_MAX_OUTPUT_SIZE = parseIntEnv(
   'CONTAINER_MAX_OUTPUT_SIZE',
   10485760,
 ); // 10MB default
-export const CREDENTIAL_PROXY_PORT = parseInt(
-  process.env.CREDENTIAL_PROXY_PORT || '3001',
-  10,
-);
+export const ONECLI_URL =
+  process.env.ONECLI_URL || envConfig.ONECLI_URL || 'http://localhost:10254';
 export const IPC_POLL_INTERVAL = 1000;
 export const IDLE_TIMEOUT = parseIntEnv('IDLE_TIMEOUT', 1800000); // 30min default — how long to keep container alive after last result
 export const MAX_CONCURRENT_CONTAINERS = Math.max(
@@ -66,11 +66,18 @@ export function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-export function buildTriggerPattern(name: string): RegExp {
-  return new RegExp(`^@${escapeRegex(name)}\\b`, 'i');
+export function buildTriggerPattern(trigger: string): RegExp {
+  return new RegExp(`^${escapeRegex(trigger.trim())}\\b`, 'i');
 }
 
-export const TRIGGER_PATTERN = buildTriggerPattern(ASSISTANT_NAME);
+export const DEFAULT_TRIGGER = `@${ASSISTANT_NAME}`;
+
+export function getTriggerPattern(trigger?: string): RegExp {
+  const normalizedTrigger = trigger?.trim();
+  return buildTriggerPattern(normalizedTrigger || DEFAULT_TRIGGER);
+}
+
+export const TRIGGER_PATTERN = buildTriggerPattern(DEFAULT_TRIGGER);
 
 // Goodbye message sent when a container idles out after having sent output.
 // Set to empty string to disable.
@@ -78,16 +85,24 @@ export const GOODBYE_MESSAGE =
   process.env.GOODBYE_MESSAGE ??
   '\u{1f44b} Going to sleep \u2014 mention me to wake me up!';
 
-// Timezone for scheduled tasks (cron expressions, etc.)
-// Uses system timezone by default
-export const TIMEZONE =
-  process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone;
+// Timezone for scheduled tasks, message formatting, etc.
+// Validates each candidate is a real IANA identifier before accepting.
+function resolveConfigTimezone(): string {
+  const candidates = [
+    process.env.TZ,
+    envConfig.TZ,
+    Intl.DateTimeFormat().resolvedOptions().timeZone,
+  ];
+  for (const tz of candidates) {
+    if (tz && isValidTimezone(tz)) return tz;
+  }
+  return 'UTC';
+}
+export const TIMEZONE = resolveConfigTimezone();
 
 // Telegram configuration
 export const TELEGRAM_BOT_TOKEN =
   process.env.TELEGRAM_BOT_TOKEN || envConfig.TELEGRAM_BOT_TOKEN || '';
-export const TELEGRAM_ONLY =
-  (process.env.TELEGRAM_ONLY || envConfig.TELEGRAM_ONLY) === 'true';
 export const TELEGRAM_BOT_POOL = (
   process.env.TELEGRAM_BOT_POOL ||
   envConfig.TELEGRAM_BOT_POOL ||

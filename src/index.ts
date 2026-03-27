@@ -4,31 +4,36 @@ import fs from 'fs';
 import http from 'http';
 import path from 'path';
 
+import { OneCLI } from '@onecli-sh/sdk';
+
 import {
   ASSISTANT_NAME,
-  CREDENTIAL_PROXY_PORT,
+  DEFAULT_TRIGGER,
+  getTriggerPattern,
   GOODBYE_MESSAGE,
+  GROUPS_DIR,
   IDLE_TIMEOUT,
+  ONECLI_URL,
   POLL_INTERVAL,
   TELEGRAM_BOT_POOL,
   TIMEZONE,
-  TRIGGER_PATTERN,
 } from './config.js';
-import { startCredentialProxy } from './credential-proxy.js';
 import { readEnvFile } from './env.js';
 import './channels/index.js';
 import {
   getChannelFactory,
   getRegisteredChannelNames,
 } from './channels/registry.js';
-import { getRuntime } from './runtime/index.js';
 import {
   ContainerOutput,
   runContainerAgent,
   writeGroupsSnapshot,
   writeTasksSnapshot,
 } from './container-runner.js';
-import { PROXY_BIND_HOST } from './container-runtime.js';
+import {
+  cleanupOrphans,
+  ensureContainerRuntimeRunning,
+} from './container-runtime.js';
 import {
   deleteTask,
   getAllChats,
@@ -37,7 +42,6 @@ import {
   getAllTasks,
   getMessagesSince,
   getNewMessages,
-  getRegisteredGroup,
   getRouterState,
   initDatabase,
   setRegisteredGroup,
@@ -49,7 +53,7 @@ import {
   updateTask,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
-import { writeGroupTemplate, resolveGroupFolderPath } from './group-folder.js';
+import { resolveGroupFolderPath } from './group-folder.js';
 import { initBotPool } from './channels/telegram.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
@@ -82,21 +86,29 @@ let messageLoopRunning = false;
 const messageMetadataCache = new Map<string, Record<string, string>>();
 const MAX_METADATA_CACHE_SIZE = 500;
 
-/**
- * Check whether any message in the batch contains a trigger word
- * from an allowed sender (or from ourselves).
- */
-function hasTriggerMessage(messages: NewMessage[], chatJid: string): boolean {
-  const allowlistCfg = loadSenderAllowlist();
-  return messages.some(
-    (m) =>
-      TRIGGER_PATTERN.test(m.content.trim()) &&
-      (m.is_from_me || isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
-  );
-}
-
 const channels: Channel[] = [];
 const queue = new GroupQueue();
+
+const onecli = new OneCLI({ url: ONECLI_URL });
+
+function ensureOneCLIAgent(jid: string, group: RegisteredGroup): void {
+  if (group.isMain) return;
+  const identifier = group.folder.toLowerCase().replace(/_/g, '-');
+  onecli.ensureAgent({ name: group.name, identifier }).then(
+    (res) => {
+      logger.info(
+        { jid, identifier, created: res.created },
+        'OneCLI agent ensured',
+      );
+    },
+    (err) => {
+      logger.debug(
+        { jid, identifier, err: String(err) },
+        'OneCLI agent ensure skipped',
+      );
+    },
+  );
+}
 
 function loadState(): void {
   lastTimestamp = getRouterState('last_timestamp') || '';
@@ -138,15 +150,28 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
   // Create group folder
   fs.mkdirSync(path.join(groupDir, 'logs'), { recursive: true });
 
-  // Write CLAUDE.md template based on channel context (e.g. GitHub PR/issue)
-  try {
-    writeGroupTemplate(group.folder, jid, group.metadata);
-  } catch (err) {
-    logger.warn(
-      { folder: group.folder, err },
-      'Failed to write group template',
+  // Copy CLAUDE.md template into the new group folder so agents have
+  // identity and instructions from the first run.  (Fixes #1391)
+  const groupMdFile = path.join(groupDir, 'CLAUDE.md');
+  if (!fs.existsSync(groupMdFile)) {
+    const templateFile = path.join(
+      GROUPS_DIR,
+      group.isMain ? 'main' : 'global',
+      'CLAUDE.md',
     );
+    if (fs.existsSync(templateFile)) {
+      let content = fs.readFileSync(templateFile, 'utf-8');
+      if (ASSISTANT_NAME !== 'Andy') {
+        content = content.replace(/^# Andy$/m, `# ${ASSISTANT_NAME}`);
+        content = content.replace(/You are Andy/g, `You are ${ASSISTANT_NAME}`);
+      }
+      fs.writeFileSync(groupMdFile, content);
+      logger.info({ folder: group.folder }, 'Created CLAUDE.md from template');
+    }
   }
+
+  // Ensure a corresponding OneCLI agent exists (best-effort, non-blocking)
+  ensureOneCLIAgent(jid, group);
 
   logger.info(
     { jid, name: group.name, folder: group.folder },
@@ -206,7 +231,14 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   // For non-main groups, check if trigger is required and present
   if (!isMainGroup && group.requiresTrigger !== false) {
-    if (!hasTriggerMessage(missedMessages, chatJid)) return true;
+    const triggerPattern = getTriggerPattern(group.trigger);
+    const allowlistCfg = loadSenderAllowlist();
+    const hasTrigger = missedMessages.some(
+      (m) =>
+        triggerPattern.test(m.content.trim()) &&
+        (m.is_from_me || isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
+    );
+    if (!hasTrigger) return true;
   }
 
   const prompt = formatMessages(missedMessages, TIMEZONE);
@@ -336,6 +368,7 @@ async function runAgent(
       id: t.id,
       groupFolder: t.group_folder,
       prompt: t.prompt,
+      script: t.script || undefined,
       schedule_type: t.schedule_type,
       schedule_value: t.schedule_value,
       status: t.status,
@@ -407,7 +440,7 @@ async function startMessageLoop(): Promise<void> {
   }
   messageLoopRunning = true;
 
-  logger.info(`NanoClaw running (trigger: @${ASSISTANT_NAME})`);
+  logger.info(`NanoClaw running (default trigger: ${DEFAULT_TRIGGER})`);
 
   while (true) {
     try {
@@ -453,7 +486,15 @@ async function startMessageLoop(): Promise<void> {
           // Non-trigger messages accumulate in DB and get pulled as
           // context when a trigger eventually arrives.
           if (needsTrigger) {
-            if (!hasTriggerMessage(groupMessages, chatJid)) continue;
+            const triggerPattern = getTriggerPattern(group.trigger);
+            const allowlistCfg = loadSenderAllowlist();
+            const hasTrigger = groupMessages.some(
+              (m) =>
+                triggerPattern.test(m.content.trim()) &&
+                (m.is_from_me ||
+                  isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
+            );
+            if (!hasTrigger) continue;
           }
 
           // Pull all messages since lastAgentTimestamp so non-trigger
@@ -519,9 +560,8 @@ function recoverPendingMessages(): void {
 }
 
 async function main(): Promise<void> {
-  const runtime = getRuntime('docker');
-  runtime.ensureRunning();
-  runtime.cleanupOrphans();
+  ensureContainerRuntimeRunning();
+  cleanupOrphans();
   initDatabase();
   logger.info('Database initialized');
 
@@ -531,13 +571,14 @@ async function main(): Promise<void> {
   }
 
   loadState();
-  restoreRemoteControl();
 
-  // Start credential proxy (containers route API calls through this)
-  const proxyServer = await startCredentialProxy(
-    CREDENTIAL_PROXY_PORT,
-    PROXY_BIND_HOST,
-  );
+  // Ensure OneCLI agents exist for all registered groups.
+  // Recovers from missed creates (e.g. OneCLI was down at registration time).
+  for (const [jid, group] of Object.entries(registeredGroups)) {
+    ensureOneCLIAgent(jid, group);
+  }
+
+  restoreRemoteControl();
 
   // Declared here so the shutdown handler closure can see it;
   // assigned after channels are connected and the webhook server starts.
@@ -546,7 +587,6 @@ async function main(): Promise<void> {
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
-    proxyServer.close();
     if (webhookServer) webhookServer.close();
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
@@ -767,6 +807,7 @@ async function main(): Promise<void> {
         id: t.id,
         groupFolder: t.group_folder,
         prompt: t.prompt,
+        script: t.script || undefined,
         schedule_type: t.schedule_type,
         schedule_value: t.schedule_value,
         status: t.status,

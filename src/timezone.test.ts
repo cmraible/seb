@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 
-import { formatLocalTime } from './timezone.js';
+import {
+  formatLocalTime,
+  isValidTimezone,
+  resolveTimezone,
+} from './timezone.js';
 
 // --- formatLocalTime ---
 
@@ -27,21 +31,43 @@ describe('formatLocalTime', () => {
     expect(tokyo).toContain('9:00');
   });
 
-  it('returns raw string for invalid timestamp', () => {
-    const result = formatLocalTime('not-a-date', 'America/New_York');
-    expect(result).toBe('not-a-date');
+  it('does not throw on invalid timezone, falls back to UTC', () => {
+    expect(() =>
+      formatLocalTime('2026-01-01T00:00:00.000Z', 'IST-2'),
+    ).not.toThrow();
+    const result = formatLocalTime('2026-01-01T12:00:00.000Z', 'IST-2');
+    // Should format as UTC (noon UTC = 12:00 PM)
+    expect(result).toContain('12:00');
+    expect(result).toContain('PM');
+  });
+});
+
+describe('isValidTimezone', () => {
+  it('accepts valid IANA identifiers', () => {
+    expect(isValidTimezone('America/New_York')).toBe(true);
+    expect(isValidTimezone('UTC')).toBe(true);
+    expect(isValidTimezone('Asia/Tokyo')).toBe(true);
+    expect(isValidTimezone('Asia/Jerusalem')).toBe(true);
   });
 
-  it('returns "unknown time" for empty timestamp', () => {
-    const result = formatLocalTime('', 'America/New_York');
-    expect(result).toBe('unknown time');
+  it('rejects invalid timezone strings', () => {
+    expect(isValidTimezone('IST-2')).toBe(false);
+    expect(isValidTimezone('XYZ+3')).toBe(false);
   });
 
-  it('falls back to ISO string for invalid timezone', () => {
-    const result = formatLocalTime(
-      '2026-02-04T18:30:00.000Z',
-      'Not/A_Timezone',
-    );
-    expect(result).toBe('2026-02-04T18:30:00.000Z');
+  it('rejects empty and garbage strings', () => {
+    expect(isValidTimezone('')).toBe(false);
+    expect(isValidTimezone('NotATimezone')).toBe(false);
+  });
+});
+
+describe('resolveTimezone', () => {
+  it('returns the timezone if valid', () => {
+    expect(resolveTimezone('America/New_York')).toBe('America/New_York');
+  });
+
+  it('falls back to UTC for invalid timezone', () => {
+    expect(resolveTimezone('IST-2')).toBe('UTC');
+    expect(resolveTimezone('')).toBe('UTC');
   });
 });
