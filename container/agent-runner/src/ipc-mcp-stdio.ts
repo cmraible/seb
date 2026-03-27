@@ -516,6 +516,7 @@ Use available_groups.json to find the JID for a group. The folder name must be c
         'Channel-prefixed folder name (e.g., "whatsapp_family-chat", "telegram_dev-team")',
       ),
     trigger: z.string().describe('Trigger word (e.g., "@Seb")'),
+    allowedMcpServers: z.array(z.string()).optional().describe('Optional allowlist of MCP server names (e.g. ["nanoclaw", "1password"]). When set, the agent only sees these servers. Omit for all servers.'),
   },
   async (args) => {
     if (!isMain) {
@@ -530,7 +531,7 @@ Use available_groups.json to find the JID for a group. The folder name must be c
       };
     }
 
-    const data = {
+    const data: Record<string, unknown> = {
       type: 'register_group',
       jid: args.jid,
       name: args.name,
@@ -538,6 +539,9 @@ Use available_groups.json to find the JID for a group. The folder name must be c
       trigger: args.trigger,
       timestamp: new Date().toISOString(),
     };
+    if (args.allowedMcpServers) {
+      data.allowedMcpServers = args.allowedMcpServers;
+    }
 
     writeIpcFile(TASKS_DIR, data);
 

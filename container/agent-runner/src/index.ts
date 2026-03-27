@@ -30,6 +30,7 @@ interface ContainerInput {
   assistantName?: string;
   ackContext?: Record<string, string>;
   script?: string;
+  allowedMcpServers?: string[];
 }
 
 interface ContainerOutput {
@@ -462,6 +463,91 @@ function waitForIpcMessage(): Promise<string | null> {
   });
 }
 
+type McpCommandServer = { command: string; args: string[]; env?: Record<string, string> };
+type McpHttpServer = { type: 'http'; url: string; headers?: Record<string, string> };
+type McpServerConfig = McpCommandServer | McpHttpServer;
+
+/** All available MCP server configs, keyed by server name. */
+export function getAllMcpServers(containerInput: ContainerInput, mcpServerPath: string): Record<string, McpServerConfig> {
+  const servers: Record<string, McpServerConfig> = {
+    nanoclaw: {
+      command: 'node',
+      args: [mcpServerPath],
+      env: {
+        NANOCLAW_CHAT_JID: containerInput.chatJid,
+        NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
+        NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+      },
+    },
+    '1password': { command: 'npx', args: ['-y', '@takescake/1password-mcp'] },
+  };
+  if (process.env.LINEAR_ACCESS_TOKEN) {
+    servers.linear = {
+      type: 'http' as const,
+      url: 'https://mcp.linear.app/mcp',
+      headers: {
+        Authorization: `Bearer ${process.env.LINEAR_ACCESS_TOKEN}`,
+      },
+    };
+  }
+  if (containerInput.isMain) {
+    servers.gmail = { command: 'npx', args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'] };
+  }
+  return servers;
+}
+
+/** Build MCP servers config, filtered by allowedMcpServers if set. */
+export function buildMcpServers(containerInput: ContainerInput, mcpServerPath: string): Record<string, McpServerConfig> {
+  const all = getAllMcpServers(containerInput, mcpServerPath);
+  const allowed = containerInput.allowedMcpServers;
+  if (!allowed || allowed.length === 0) return all;
+
+  const filtered: Record<string, McpServerConfig> = {};
+  for (const name of allowed) {
+    if (all[name]) filtered[name] = all[name];
+  }
+  return filtered;
+}
+
+/** Base tools that are always available (non-MCP). */
+const BASE_TOOLS = [
+  'Bash',
+  'Read', 'Write', 'Edit', 'Glob', 'Grep',
+  'WebSearch', 'WebFetch',
+  'Task', 'TaskOutput', 'TaskStop',
+  'TeamCreate', 'TeamDelete', 'SendMessage',
+  'TodoWrite', 'ToolSearch', 'Skill',
+  'NotebookEdit',
+];
+
+/** All MCP tool patterns keyed by server name. */
+const MCP_TOOL_PATTERNS: Record<string, string> = {
+  nanoclaw: 'mcp__nanoclaw__*',
+  '1password': 'mcp__1password__*',
+  linear: 'mcp__linear__*',
+  gmail: 'mcp__gmail__*',
+};
+
+/** Build allowedTools list, filtered by allowedMcpServers if set. */
+export function buildAllowedTools(containerInput: ContainerInput): string[] {
+  const tools = [...BASE_TOOLS];
+  const allowed = containerInput.allowedMcpServers;
+
+  if (!allowed || allowed.length === 0) {
+    // No filter: include all MCP tool patterns (linear/gmail conditional)
+    tools.push('mcp__nanoclaw__*', 'mcp__1password__*');
+    if (process.env.LINEAR_ACCESS_TOKEN) tools.push('mcp__linear__*');
+    if (containerInput.isMain) tools.push('mcp__gmail__*');
+  } else {
+    // Only include tool patterns for allowed servers
+    for (const name of allowed) {
+      if (MCP_TOOL_PATTERNS[name]) tools.push(MCP_TOOL_PATTERNS[name]);
+    }
+  }
+
+  return tools;
+}
+
 /**
  * Run a single query and stream results via writeOutput.
  * Uses MessageStream (AsyncIterable) to keep isSingleUserTurn=false,
@@ -547,68 +633,12 @@ async function runQuery(
             append: globalClaudeMd,
           }
         : undefined,
-      allowedTools: [
-        'Bash',
-        'Read',
-        'Write',
-        'Edit',
-        'Glob',
-        'Grep',
-        'WebSearch',
-        'WebFetch',
-        'Task',
-        'TaskOutput',
-        'TaskStop',
-        'TeamCreate',
-        'TeamDelete',
-        'SendMessage',
-        'TodoWrite',
-        'ToolSearch',
-        'Skill',
-        'NotebookEdit',
-        'mcp__nanoclaw__*',
-        'mcp__1password__*',
-        ...(process.env.LINEAR_ACCESS_TOKEN ? ['mcp__linear__*'] : []),
-        ...(containerInput.isMain ? ['mcp__gmail__*'] : []),
-      ],
+      allowedTools: buildAllowedTools(containerInput),
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       settingSources: ['project', 'user'],
-      mcpServers: {
-        nanoclaw: {
-          command: 'node',
-          args: [mcpServerPath],
-          env: {
-            NANOCLAW_CHAT_JID: containerInput.chatJid,
-            NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
-            NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
-          },
-        },
-        '1password': {
-          command: 'npx',
-          args: ['-y', '@takescake/1password-mcp'],
-        },
-        ...(process.env.LINEAR_ACCESS_TOKEN
-          ? {
-              linear: {
-                type: 'http' as const,
-                url: 'https://mcp.linear.app/mcp',
-                headers: {
-                  Authorization: `Bearer ${process.env.LINEAR_ACCESS_TOKEN}`,
-                },
-              },
-            }
-          : {}),
-        ...(containerInput.isMain
-          ? {
-              gmail: {
-                command: 'npx',
-                args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'],
-              },
-            }
-          : {}),
-      },
+      mcpServers: buildMcpServers(containerInput, mcpServerPath),
       hooks: {
         PreCompact: [
           { hooks: [createPreCompactHook(containerInput.assistantName)] },

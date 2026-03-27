@@ -208,6 +208,7 @@ Fields:
 - **trigger**: The trigger word (usually same as global, but could differ)
 - **requiresTrigger**: Whether `@trigger` prefix is needed (default: `true`). Set to `false` for solo/personal chats where all messages should be processed
 - **isMain**: Whether this is the main control group (elevated privileges, no trigger required)
+- **allowedMcpServers**: Optional array of MCP server names (e.g. `["nanoclaw", "1password"]`). When set, the agent only sees these servers. Omit for all servers (default)
 - **added_at**: ISO timestamp when registered
 
 ### Trigger Behavior
@@ -221,6 +222,7 @@ Fields:
 1. Query the database to find the group's JID
 2. Use the `register_group` MCP tool with the JID, name, folder, and trigger
 3. Optionally include `containerConfig` for additional mounts
+4. Optionally include `allowedMcpServers` to restrict which MCP servers are available (e.g. `["nanoclaw"]` for a work group that should not see personal tools)
 4. The group folder is created automatically: `/workspace/project/groups/{folder-name}/`
 5. Optionally create an initial `CLAUDE.md` for the group
 

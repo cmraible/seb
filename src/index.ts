@@ -465,6 +465,7 @@ async function runAgent(
         isMain,
         assistantName: ASSISTANT_NAME,
         ackContext,
+        allowedMcpServers: group.allowedMcpServers,
       },
       (instance, containerName) =>
         queue.registerProcess(chatJid, instance, containerName, group.folder),

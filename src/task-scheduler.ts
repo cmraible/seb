@@ -209,6 +209,7 @@ async function runTask(
         isScheduledTask: true,
         assistantName: ASSISTANT_NAME,
         script: task.script || undefined,
+        allowedMcpServers: group.allowedMcpServers,
       },
       (instance, containerName) =>
         deps.onProcess(

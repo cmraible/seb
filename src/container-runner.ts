@@ -63,6 +63,7 @@ export interface ContainerInput {
   assistantName?: string;
   ackContext?: Record<string, string>;
   script?: string;
+  allowedMcpServers?: string[];
 }
 
 export interface ContainerOutput {
