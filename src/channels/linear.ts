@@ -715,6 +715,7 @@ export class LinearChannel implements Channel {
         if (issueData?.assignee?.name)
           metadata.assignee = issueData.assignee.name;
         if (issueData?.state?.name) metadata.status = issueData.state.name;
+        if (issueData?.state?.type) metadata.stateType = issueData.state.type;
         if (issueData?.priority != null)
           metadata.priority = String(issueData.priority);
         if (issueData?.url) metadata.url = issueData.url;
@@ -768,6 +769,9 @@ export class LinearChannel implements Channel {
               ? { assignee: issueData.assignee.name }
               : {}),
             ...(issueData?.state?.name ? { status: issueData.state.name } : {}),
+            ...(issueData?.state?.type
+              ? { stateType: issueData.state.type }
+              : {}),
           },
         });
         logger.info(
@@ -864,15 +868,21 @@ export class LinearChannel implements Channel {
       metadata: formatted.metadata,
     });
 
-    // Auto-launch container when an issue assigned/delegated to the bot
-    // transitions to a "started" status (e.g., In Progress, Implement).
-    // This enables the bot to proactively pick up work when issues move
-    // through the pipeline, without requiring an explicit delegation.
+    // Auto-launch container when a bot-assigned/delegated issue reaches
+    // a qualifying status. This fires in two scenarios:
+    //   1. Status change → issue moves to 'unstarted' (Todo) or 'started'
+    //      (In Progress) while already assigned/delegated to the bot.
+    //   2. Assignment change → issue is assigned/delegated to the bot while
+    //      already in a qualifying status. We check the registered group's
+    //      metadata for the current state since Linear may not include state
+    //      in the payload when only assignment changed.
+    // Linear state.type: 'backlog' | 'unstarted' | 'started' | 'completed' | 'canceled'
+    const AUTO_LAUNCH_STATE_TYPES = new Set(['unstarted', 'started']);
+
     if (
       this.opts.requestProcessing &&
       type === 'Issue' &&
-      action === 'update' &&
-      data.state // state is only present when it changed
+      (action === 'update' || action === 'create')
     ) {
       const assigneeId = issueData?.assignee?.id;
       const delegateId = issueData?.delegate?.id;
@@ -880,18 +890,26 @@ export class LinearChannel implements Channel {
         !!this.botUserId &&
         (assigneeId === this.botUserId || delegateId === this.botUserId);
 
-      // Linear state.type: 'backlog' | 'unstarted' | 'started' | 'completed' | 'canceled'
-      const stateType = data.state?.type;
+      // Determine the current state type — prefer the webhook payload,
+      // fall back to registered group metadata for assignment-only changes.
+      const groupMeta = this.opts.registeredGroups()[chatJid]?.metadata as
+        | Record<string, string>
+        | undefined;
+      const stateType = data.state?.type || groupMeta?.stateType;
 
-      if (isAssignedToBot && stateType === 'started') {
+      if (
+        isAssignedToBot &&
+        stateType &&
+        AUTO_LAUNCH_STATE_TYPES.has(stateType)
+      ) {
         logger.info(
           {
             chatJid,
             identifier,
-            status: data.state.name,
+            status: data.state?.name || stateType,
             stateType,
           },
-          'Auto-launching container for status change on bot-assigned issue',
+          'Auto-launching container for bot-assigned issue in qualifying status',
         );
         this.opts.requestProcessing(chatJid);
       }
