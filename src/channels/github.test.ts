@@ -1170,6 +1170,200 @@ describe('GitHubChannel bot username bypass', () => {
   });
 });
 
+// --- review_requested event ---
+
+describe('GitHubChannel review_requested event', () => {
+  const SECRET = 'test-webhook-secret';
+  let port: number;
+  let server: http.Server;
+  let channel: GitHubChannel;
+  let opts: ChannelOpts;
+
+  afterEach(async () => {
+    await channel.disconnect();
+    server.close();
+  });
+
+  it('formats review_requested event with reviewer name', async () => {
+    opts = createTestOpts();
+    channel = new GitHubChannel(
+      SECRET,
+      'test-token',
+      [],
+      opts,
+      'seb-writes-code',
+    );
+    await channel.connect();
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
+
+    await sendWebhook(port, {
+      event: 'pull_request',
+      secret: SECRET,
+      payload: {
+        action: 'review_requested',
+        repository: { full_name: 'cmraible/seb' },
+        pull_request: {
+          number: 20,
+          title: 'New feature',
+          html_url: 'https://github.com/cmraible/seb/pull/20',
+          merged: false,
+          user: { login: 'alice' },
+        },
+        requested_reviewer: { login: 'seb-writes-code' },
+        sender: { login: 'alice' },
+      },
+    });
+
+    expect(opts.onMessage).toHaveBeenCalledWith(
+      'gh:cmraible/seb#20',
+      expect.objectContaining({
+        content: expect.stringContaining(
+          'Review requested from seb-writes-code on PR #20',
+        ),
+      }),
+    );
+  });
+
+  it('registers group for review_requested event', async () => {
+    opts = createTestOpts();
+    channel = new GitHubChannel(
+      SECRET,
+      'test-token',
+      [],
+      opts,
+      'seb-writes-code',
+    );
+    await channel.connect();
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
+
+    await sendWebhook(port, {
+      event: 'pull_request',
+      secret: SECRET,
+      payload: {
+        action: 'review_requested',
+        repository: { full_name: 'cmraible/seb' },
+        pull_request: {
+          number: 21,
+          title: 'Another feature',
+          html_url: 'https://github.com/cmraible/seb/pull/21',
+          merged: false,
+          user: { login: 'chris' },
+        },
+        requested_reviewer: { login: 'seb-writes-code' },
+        sender: { login: 'chris' },
+      },
+    });
+
+    expect(opts.registerGroup).toHaveBeenCalledWith(
+      'gh:cmraible/seb#21',
+      expect.objectContaining({
+        requiresTrigger: false,
+        metadata: expect.objectContaining({
+          type: 'pull_request',
+          author: 'chris',
+        }),
+      }),
+    );
+  });
+});
+
+// --- Author metadata passthrough ---
+
+describe('GitHubChannel author metadata', () => {
+  const SECRET = 'test-webhook-secret';
+  let port: number;
+  let server: http.Server;
+  let channel: GitHubChannel;
+  let opts: ChannelOpts;
+
+  afterEach(async () => {
+    await channel.disconnect();
+    server.close();
+  });
+
+  it('includes author in metadata when registering PR group', async () => {
+    opts = createTestOpts();
+    channel = new GitHubChannel(
+      SECRET,
+      'test-token',
+      [],
+      opts,
+      'seb-writes-code',
+    );
+    await channel.connect();
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
+
+    await sendWebhook(port, {
+      event: 'pull_request',
+      secret: SECRET,
+      payload: {
+        action: 'opened',
+        repository: { full_name: 'cmraible/seb' },
+        pull_request: {
+          number: 30,
+          title: 'Bot PR',
+          html_url: 'https://github.com/cmraible/seb/pull/30',
+          merged: false,
+          user: { login: 'seb-writes-code' },
+        },
+        sender: { login: 'seb-writes-code' },
+      },
+    });
+
+    expect(opts.registerGroup).toHaveBeenCalledWith(
+      'gh:cmraible/seb#30',
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          type: 'pull_request',
+          author: 'seb-writes-code',
+        }),
+      }),
+    );
+  });
+
+  it('includes external author in metadata', async () => {
+    opts = createTestOpts();
+    channel = new GitHubChannel(SECRET, 'test-token', [], opts);
+    await channel.connect();
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
+
+    await sendWebhook(port, {
+      event: 'pull_request',
+      secret: SECRET,
+      payload: {
+        action: 'opened',
+        repository: { full_name: 'cmraible/seb' },
+        pull_request: {
+          number: 31,
+          title: 'External PR',
+          html_url: 'https://github.com/cmraible/seb/pull/31',
+          merged: false,
+          user: { login: 'contributor' },
+        },
+        sender: { login: 'contributor' },
+      },
+    });
+
+    expect(opts.registerGroup).toHaveBeenCalledWith(
+      'gh:cmraible/seb#31',
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          type: 'pull_request',
+          author: 'contributor',
+        }),
+      }),
+    );
+  });
+});
+
 // --- Sender allowlist tests (separate describe with its own channel) ---
 
 describe('GitHubChannel sender allowlist', () => {

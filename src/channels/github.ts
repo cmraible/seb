@@ -191,6 +191,13 @@ function formatEvent(event: string, payload: any): FormattedEvent | null {
           text: `[GitHub] PR ${label}: #${pr.number} "${pr.title}" in ${repo}\n${pr.html_url}`,
         };
       }
+      if (action === 'review_requested') {
+        const reviewer =
+          payload.requested_reviewer?.login || 'unknown reviewer';
+        return {
+          text: `[GitHub] Review requested from ${reviewer} on PR #${pr.number} "${pr.title}" in ${repo}\n${pr.html_url}`,
+        };
+      }
       return null;
     }
 
@@ -400,13 +407,14 @@ export class GitHubChannel implements Channel {
               .slice(0, 57)}`;
         const groupType = extractGroupType(event, payload);
         const title = extractTitle(event, payload);
+        const author = extractAuthor(event, payload) || prAuthorFromApi;
         const metadata: Record<string, string> = { type: groupType };
         if (title) metadata.title = title;
+        if (author) metadata.author = author;
 
         // PRs skip trigger so the agent processes all events autonomously
         // (auto-review on open/update, CI fix on check_suite, etc.).
         // Issues require a trigger unless opened/assigned to the bot.
-        const author = extractAuthor(event, payload) || prAuthorFromApi;
         const isBotAuthor = !!this.botUsername && author === this.botUsername;
         const isBotAssigned =
           !!this.botUsername &&
