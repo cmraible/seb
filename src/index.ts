@@ -814,6 +814,9 @@ async function main(): Promise<void> {
     pauseTask: (taskId: string) => updateTask(taskId, { status: 'paused' }),
     resumeTask: (taskId: string) => updateTask(taskId, { status: 'active' }),
     requestRestart: () => shutdown('RESTART'),
+    requestProcessing: (chatJid: string) => {
+      queue.enqueueMessageCheck(chatJid);
+    },
   };
 
   // Create and connect all registered channels.

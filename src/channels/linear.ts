@@ -864,6 +864,39 @@ export class LinearChannel implements Channel {
       metadata: formatted.metadata,
     });
 
+    // Auto-launch container when an issue assigned/delegated to the bot
+    // transitions to a "started" status (e.g., In Progress, Implement).
+    // This enables the bot to proactively pick up work when issues move
+    // through the pipeline, without requiring an explicit delegation.
+    if (
+      this.opts.requestProcessing &&
+      type === 'Issue' &&
+      action === 'update' &&
+      data.state // state is only present when it changed
+    ) {
+      const assigneeId = issueData?.assignee?.id;
+      const delegateId = issueData?.delegate?.id;
+      const isAssignedToBot =
+        !!this.botUserId &&
+        (assigneeId === this.botUserId || delegateId === this.botUserId);
+
+      // Linear state.type: 'backlog' | 'unstarted' | 'started' | 'completed' | 'canceled'
+      const stateType = data.state?.type;
+
+      if (isAssignedToBot && stateType === 'started') {
+        logger.info(
+          {
+            chatJid,
+            identifier,
+            status: data.state.name,
+            stateType,
+          },
+          'Auto-launching container for status change on bot-assigned issue',
+        );
+        this.opts.requestProcessing(chatJid);
+      }
+    }
+
     logger.info(
       { type, action, chatJid, deliveryId },
       'Linear webhook event processed',

@@ -690,6 +690,270 @@ describe('LinearChannel', () => {
     });
   });
 
+  describe('status change auto-processing', () => {
+    it('calls requestProcessing when bot-delegated issue moves to started status', async () => {
+      const botUserId = 'bot-user-123';
+      const requestProcessing = vi.fn();
+      const existingGroup = {
+        name: 'ENG-40',
+        folder: 'linear_eng-40',
+        trigger: '@Seb',
+        added_at: '2026-03-21T12:00:00Z',
+        requiresTrigger: false,
+        metadata: {
+          type: 'issue',
+          identifier: 'ENG-40',
+          title: 'Test issue',
+        },
+      };
+      opts = createTestOpts({
+        registeredGroups: vi.fn(() => ({
+          'linear:ENG-40': existingGroup,
+        })),
+        requestProcessing,
+      });
+      channel = new LinearChannel(
+        SECRET,
+        'test-client-id',
+        'test-client-secret',
+        botUserId,
+        opts,
+      );
+      await channel.connect();
+      const result = await startServer(opts.app!);
+      server = result.server;
+      port = result.port;
+
+      const payload = {
+        type: 'Issue',
+        action: 'update',
+        data: {
+          identifier: 'ENG-40',
+          title: 'Test issue',
+          delegate: { id: botUserId, name: 'Seb' },
+          state: { name: 'In Progress', type: 'started' },
+          team: { key: 'ENG' },
+          url: 'https://linear.app/test/issue/ENG-40',
+        },
+        actor: { id: 'user-1', name: 'Chris' },
+      };
+      await sendLinearWebhook(port, { payload, secret: SECRET });
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(requestProcessing).toHaveBeenCalledWith('linear:ENG-40');
+    });
+
+    it('calls requestProcessing when bot-assigned issue moves to started status', async () => {
+      const botUserId = 'bot-user-123';
+      const requestProcessing = vi.fn();
+      const existingGroup = {
+        name: 'ENG-41',
+        folder: 'linear_eng-41',
+        trigger: '@Seb',
+        added_at: '2026-03-21T12:00:00Z',
+        requiresTrigger: false,
+        metadata: {
+          type: 'issue',
+          identifier: 'ENG-41',
+          title: 'Assigned issue',
+        },
+      };
+      opts = createTestOpts({
+        registeredGroups: vi.fn(() => ({
+          'linear:ENG-41': existingGroup,
+        })),
+        requestProcessing,
+      });
+      channel = new LinearChannel(
+        SECRET,
+        'test-client-id',
+        'test-client-secret',
+        botUserId,
+        opts,
+      );
+      await channel.connect();
+      const result = await startServer(opts.app!);
+      server = result.server;
+      port = result.port;
+
+      const payload = {
+        type: 'Issue',
+        action: 'update',
+        data: {
+          identifier: 'ENG-41',
+          title: 'Assigned issue',
+          assignee: { id: botUserId, name: 'Seb' },
+          state: { name: 'Implement', type: 'started' },
+          team: { key: 'ENG' },
+          url: 'https://linear.app/test/issue/ENG-41',
+        },
+        actor: { id: 'user-1', name: 'Chris' },
+      };
+      await sendLinearWebhook(port, { payload, secret: SECRET });
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(requestProcessing).toHaveBeenCalledWith('linear:ENG-41');
+    });
+
+    it('does NOT call requestProcessing for non-started status types', async () => {
+      const botUserId = 'bot-user-123';
+      const requestProcessing = vi.fn();
+      const existingGroup = {
+        name: 'ENG-42',
+        folder: 'linear_eng-42',
+        trigger: '@Seb',
+        added_at: '2026-03-21T12:00:00Z',
+        requiresTrigger: false,
+        metadata: {
+          type: 'issue',
+          identifier: 'ENG-42',
+          title: 'Completed issue',
+        },
+      };
+      opts = createTestOpts({
+        registeredGroups: vi.fn(() => ({
+          'linear:ENG-42': existingGroup,
+        })),
+        requestProcessing,
+      });
+      channel = new LinearChannel(
+        SECRET,
+        'test-client-id',
+        'test-client-secret',
+        botUserId,
+        opts,
+      );
+      await channel.connect();
+      const result = await startServer(opts.app!);
+      server = result.server;
+      port = result.port;
+
+      const payload = {
+        type: 'Issue',
+        action: 'update',
+        data: {
+          identifier: 'ENG-42',
+          title: 'Completed issue',
+          assignee: { id: botUserId, name: 'Seb' },
+          state: { name: 'Done', type: 'completed' },
+          team: { key: 'ENG' },
+          url: 'https://linear.app/test/issue/ENG-42',
+        },
+        actor: { id: 'user-1', name: 'Chris' },
+      };
+      await sendLinearWebhook(port, { payload, secret: SECRET });
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(requestProcessing).not.toHaveBeenCalled();
+    });
+
+    it('does NOT call requestProcessing when issue is not assigned to bot', async () => {
+      const botUserId = 'bot-user-123';
+      const requestProcessing = vi.fn();
+      const existingGroup = {
+        name: 'ENG-43',
+        folder: 'linear_eng-43',
+        trigger: '@Seb',
+        added_at: '2026-03-21T12:00:00Z',
+        requiresTrigger: true,
+        metadata: {
+          type: 'issue',
+          identifier: 'ENG-43',
+          title: 'Other person issue',
+        },
+      };
+      opts = createTestOpts({
+        registeredGroups: vi.fn(() => ({
+          'linear:ENG-43': existingGroup,
+        })),
+        requestProcessing,
+      });
+      channel = new LinearChannel(
+        SECRET,
+        'test-client-id',
+        'test-client-secret',
+        botUserId,
+        opts,
+      );
+      await channel.connect();
+      const result = await startServer(opts.app!);
+      server = result.server;
+      port = result.port;
+
+      const payload = {
+        type: 'Issue',
+        action: 'update',
+        data: {
+          identifier: 'ENG-43',
+          title: 'Other person issue',
+          assignee: { id: 'other-user', name: 'Someone' },
+          state: { name: 'In Progress', type: 'started' },
+          team: { key: 'ENG' },
+          url: 'https://linear.app/test/issue/ENG-43',
+        },
+        actor: { id: 'user-1', name: 'Chris' },
+      };
+      await sendLinearWebhook(port, { payload, secret: SECRET });
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(requestProcessing).not.toHaveBeenCalled();
+    });
+
+    it('does NOT call requestProcessing when status change is by the bot itself', async () => {
+      const botUserId = 'bot-user-123';
+      const requestProcessing = vi.fn();
+      const existingGroup = {
+        name: 'ENG-44',
+        folder: 'linear_eng-44',
+        trigger: '@Seb',
+        added_at: '2026-03-21T12:00:00Z',
+        requiresTrigger: false,
+        metadata: {
+          type: 'issue',
+          identifier: 'ENG-44',
+          title: 'Self-update issue',
+        },
+      };
+      opts = createTestOpts({
+        registeredGroups: vi.fn(() => ({
+          'linear:ENG-44': existingGroup,
+        })),
+        requestProcessing,
+      });
+      channel = new LinearChannel(
+        SECRET,
+        'test-client-id',
+        'test-client-secret',
+        botUserId,
+        opts,
+      );
+      await channel.connect();
+      const result = await startServer(opts.app!);
+      server = result.server;
+      port = result.port;
+
+      const payload = {
+        type: 'Issue',
+        action: 'update',
+        data: {
+          identifier: 'ENG-44',
+          title: 'Self-update issue',
+          delegate: { id: botUserId, name: 'Seb' },
+          state: { name: 'In Progress', type: 'started' },
+          team: { key: 'ENG' },
+          url: 'https://linear.app/test/issue/ENG-44',
+        },
+        // Actor is the bot itself
+        actor: { id: botUserId, name: 'Seb' },
+      };
+      await sendLinearWebhook(port, { payload, secret: SECRET });
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Bot events are skipped entirely (before requestProcessing check)
+      expect(requestProcessing).not.toHaveBeenCalled();
+    });
+  });
+
   describe('AgentSessionEvent', () => {
     beforeEach(async () => {
       opts = createTestOpts();
