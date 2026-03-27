@@ -603,6 +603,73 @@ export class LinearChannel implements Channel {
         });
     });
 
+    // OAuth authorize URL generator — produces the correct Linear OAuth URL
+    app.get('/linear/authorize', async (_req, res) => {
+      if (!this.clientId) {
+        res.status(500).send('LINEAR_CLIENT_ID is not configured');
+        return;
+      }
+
+      const redirectUri =
+        'https://webhooks.seb-writes-code.dev/linear/callback';
+      const scopes =
+        'read,write,issues:create,comments:create,app:assignable,app:mentionable';
+
+      const params = new URLSearchParams({
+        client_id: this.clientId,
+        redirect_uri: redirectUri,
+        response_type: 'code',
+        scope: scopes,
+        actor: 'app',
+        prompt: 'consent',
+      });
+
+      const authorizeUrl = `https://linear.app/oauth/authorize?${params.toString()}`;
+
+      // Check current token status
+      let tokenStatus = 'No token';
+      let botUserInfo = '';
+      if (this.accessToken) {
+        try {
+          const viewerId = await fetchLinearViewerId(this.accessToken);
+          tokenStatus = 'Valid';
+          botUserInfo = `Bot user ID: ${viewerId}`;
+        } catch {
+          tokenStatus = 'Invalid or expired';
+        }
+      }
+
+      const hasRefreshToken = !!this.refreshToken;
+
+      res
+        .status(200)
+        .send(
+          '<!DOCTYPE html><html><head><meta charset="utf-8">' +
+            '<title>Linear OAuth — Authorize</title>' +
+            '<style>body{font-family:system-ui,sans-serif;max-width:600px;margin:40px auto;padding:0 20px;line-height:1.6}' +
+            'a.btn{display:inline-block;padding:10px 20px;background:#5E6AD2;color:#fff;text-decoration:none;border-radius:6px;font-weight:600}' +
+            'a.btn:hover{background:#4C56B8}' +
+            '.status{background:#f5f5f5;padding:16px;border-radius:8px;margin:20px 0}' +
+            '.status dt{font-weight:600;margin-top:8px}.status dd{margin:0 0 4px 0;color:#555}</style></head><body>' +
+            '<h1>Linear OAuth</h1>' +
+            '<div class="status"><h3>Current Token Status</h3><dl>' +
+            `<dt>Status</dt><dd>${tokenStatus}</dd>` +
+            `<dt>Refresh Token</dt><dd>${hasRefreshToken ? 'Present' : 'None'}</dd>` +
+            (botUserInfo ? `<dt>Bot User</dt><dd>${botUserInfo}</dd>` : '') +
+            '</dl></div>' +
+            '<h3>Authorize / Re-authorize</h3>' +
+            '<p>Click below to start the Linear OAuth flow with the correct scopes and actor mode:</p>' +
+            `<p><a class="btn" href="${authorizeUrl}">Authorize with Linear</a></p>` +
+            '<h3>Details</h3><dl>' +
+            `<dt>Client ID</dt><dd>${this.clientId.slice(0, 8)}…</dd>` +
+            `<dt>Redirect URI</dt><dd>${redirectUri}</dd>` +
+            `<dt>Scopes</dt><dd>${scopes}</dd>` +
+            '<dt>Actor</dt><dd>app</dd>' +
+            '</dl>' +
+            '</body></html>',
+        );
+    });
+
     // On startup, load persisted OAuth token if it exists
     const persisted = loadLinearOAuth();
     if (persisted) {
@@ -623,7 +690,7 @@ export class LinearChannel implements Channel {
 
     this.connected = true;
     logger.info(
-      'Linear routes mounted on /linear/webhook and /linear/callback',
+      'Linear routes mounted on /linear/webhook, /linear/callback, and /linear/authorize',
     );
   }
 
