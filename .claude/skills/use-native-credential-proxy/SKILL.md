@@ -74,6 +74,7 @@ In `groups/main/CLAUDE.md`, replace:
 with:
 > The native credential proxy manages credentials (including Anthropic auth) via `.env` — see `src/credential-proxy.ts`.
 
+
 ### Validate code changes
 
 ```bash

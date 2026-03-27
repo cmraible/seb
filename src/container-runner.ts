@@ -14,22 +14,21 @@ import {
   DATA_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
-  ONECLI_URL,
+  CREDENTIAL_PROXY_PORT,
   TIMEZONE,
 } from './config.js';
+import { detectAuthMode } from './credential-proxy.js';
 import { readEnvFile } from './env.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import {
+  CONTAINER_HOST_GATEWAY,
   CONTAINER_RUNTIME_BIN,
   hostGatewayArgs,
   readonlyMountArgs,
 } from './container-runtime.js';
-import { OneCLI } from '@onecli-sh/sdk';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
-
-const onecli = new OneCLI({ url: ONECLI_URL });
 
 /**
  * Returns channel-specific skill directory names for a group based on its
@@ -107,7 +106,7 @@ function buildVolumeMounts(
     });
 
     // Shadow .env so the agent cannot read secrets from the mounted project root.
-    // Credentials are injected by the OneCLI gateway, never exposed to containers.
+    // Credentials are injected by the credential proxy, never exposed to containers.
     const envFile = path.join(projectRoot, '.env');
     if (fs.existsSync(envFile)) {
       mounts.push({
@@ -301,27 +300,23 @@ function buildVolumeMounts(
 async function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
-  agentIdentifier?: string,
 ): Promise<string[]> {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
 
-  // OneCLI gateway handles credential injection — containers never see real secrets.
-  // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.
-  const onecliApplied = await onecli.applyContainerConfig(args, {
-    addHostMapping: false, // Nanoclaw already handles host gateway
-    agent: agentIdentifier,
-  });
-  if (onecliApplied) {
-    logger.info({ containerName }, 'OneCLI gateway config applied');
+  // Route API traffic through the credential proxy (containers never see real secrets)
+  const authMode = detectAuthMode();
+  if (authMode === 'api-key') {
+    args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
   } else {
-    logger.warn(
-      { containerName },
-      'OneCLI gateway not reachable — container will have no credentials',
-    );
+    args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
   }
+  args.push(
+    '-e',
+    `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
+  );
 
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
@@ -388,15 +383,7 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  // Main group uses the default OneCLI agent; others use their own agent.
-  const agentIdentifier = input.isMain
-    ? undefined
-    : group.folder.toLowerCase().replace(/_/g, '-');
-  const containerArgs = await buildContainerArgs(
-    mounts,
-    containerName,
-    agentIdentifier,
-  );
+  const containerArgs = await buildContainerArgs(mounts, containerName);
 
   logger.debug(
     {

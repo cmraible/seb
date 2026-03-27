@@ -72,7 +72,7 @@ Then run `/setup`. Claude Code handles everything: dependencies, authentication,
 - **Scheduled tasks** - Recurring jobs that run Claude and can message you back
 - **Web access** - Search and fetch content from the Web
 - **Container isolation** - Agents are sandboxed in Docker (macOS/Linux), [Docker Sandboxes](docs/docker-sandboxes.md) (micro VM isolation), or Apple Container (macOS)
-- **Credential security** - Agents never hold raw API keys. Outbound requests route through [OneCLI's Agent Vault](https://github.com/onecli/onecli), which injects credentials at request time and enforces per-agent policies and rate limits.
+- **Credential security** - Agents never hold raw API keys. Outbound requests route through a local credential proxy that injects credentials at request time.
 - **Agent Swarms** - Spin up teams of specialized agents that collaborate on complex tasks
 - **Optional integrations** - Add Gmail (`/add-gmail`) and more via skills
 
