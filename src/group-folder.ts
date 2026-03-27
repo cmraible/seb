@@ -182,6 +182,16 @@ When you receive a "PR opened" or "PR updated" event, automatically review the c
 - \`gh pr review ${ctx.number} --repo ${ctx.repo} --approve --body "..."\` — approve PR
 - \`gh pr review ${ctx.number} --repo ${ctx.repo} --request-changes --body "..."\` — request changes
 
+## Installing Dependencies Before Committing
+Before making any commits (e.g. CI fixes), install project dependencies so git hooks (husky/lint-staged/prettier) are set up:
+\`\`\`bash
+if [ -f bun.lockb ] || [ -f bun.lock ]; then bun install
+elif [ -f package-lock.json ]; then npm install
+elif [ -f yarn.lock ]; then yarn install
+elif [ -f pnpm-lock.yaml ]; then pnpm install
+fi
+\`\`\`
+
 ## Repo Location
 The repo may be cloned locally. Check \`/workspace/extra/\` for clones.
 `;
@@ -204,6 +214,7 @@ You are activated by GitHub webhook events on this issue. You have access to the
 ## Behavior
 - When @seb-writes-code or @seb-assistant is mentioned, respond to the comment
 - If assigned to this issue, proactively investigate and propose a fix via a new PR
+- Before making any commits, install project dependencies so git hooks run: detect lockfile (\`package-lock.json\` → npm, \`bun.lockb\`/\`bun.lock\` → bun, \`yarn.lock\` → yarn, \`pnpm-lock.yaml\` → pnpm) and run the appropriate install command
 - Always include a link to the issue in your messages
 
 ## Useful Commands
@@ -224,6 +235,16 @@ You are Seb, monitoring the main branch of a GitHub repository.
 
 ## Your Role
 You are activated by check_suite events on the main branch. If CI fails on main, investigate and raise a PR to fix it.
+
+## Installing Dependencies Before Committing
+Before making any commits, install project dependencies so git hooks (husky/lint-staged/prettier) run:
+\`\`\`bash
+if [ -f bun.lockb ] || [ -f bun.lock ]; then bun install
+elif [ -f package-lock.json ]; then npm install
+elif [ -f yarn.lock ]; then yarn install
+elif [ -f pnpm-lock.yaml ]; then pnpm install
+fi
+\`\`\`
 
 ## Useful Commands
 - \`gh run list --repo ${ctx.repo} --limit 5\` — check recent CI runs
@@ -306,18 +327,37 @@ Read the issue details and any comments. The issue context from Linear is includ
 ### Step 2: Find the right repository
 Use the \`gh\` CLI to determine which repo to work in. Common repos:
 - \`cmraible/seb\` — The main NanoClaw/Seb project
+- \`cmraible/sandctl\` — The sandctl CLI project
+- \`cmraible/rebased\` — The Rebased project
 
 If unsure, check the issue description for repo references, or look at related issues.
 
 ### Step 3: Clone and branch
+
+**IMPORTANT**: You are authenticated as \`seb-writes-code\`, which is a fork-based workflow. Always clone from the target repo (e.g. \`cmraible/seb\`), NOT from \`seb-writes-code\`. Then push to the fork and open the PR against the target repo.
+
 \`\`\`bash
 cd /tmp
-gh repo clone <owner>/<repo> work-repo
+gh repo clone <owner>/<repo> work-repo -- --depth=50
 cd work-repo
+git remote set-url origin https://x-access-token:$(gh auth token)@github.com/seb-writes-code/<repo>.git
+git remote add upstream https://github.com/<owner>/<repo>.git
 git checkout -b <branch-name>
 \`\`\`
 
 Send an \`[action:Cloning repository] owner/repo\` activity.
+
+### Step 3.5: Install dependencies
+Before making any commits, install project dependencies so git hooks (husky/lint-staged/prettier) are set up:
+\`\`\`bash
+# Detect package manager from lockfiles and install
+if [ -f bun.lockb ] || [ -f bun.lock ]; then bun install
+elif [ -f package-lock.json ]; then npm install
+elif [ -f yarn.lock ]; then yarn install
+elif [ -f pnpm-lock.yaml ]; then pnpm install
+fi
+\`\`\`
+This ensures pre-commit hooks run automatically and CI won't fail due to formatting issues.
 
 ### Step 4: Implement
 - Read the relevant code to understand the codebase
@@ -326,11 +366,15 @@ Send an \`[action:Cloning repository] owner/repo\` activity.
 - Send \`[thought]\` activities as you reason through the implementation
 
 ### Step 5: Push and create PR
+
+**CRITICAL**: Always specify \`--repo <owner>/<repo>\` and \`--head seb-writes-code:<branch>\` to ensure the PR targets the correct repo.
+
 \`\`\`bash
 git add <files>
 git commit -m "description of changes"
 git push -u origin <branch-name>
-gh pr create --title "..." --body "..."
+gh pr create --repo <owner>/<repo> --head seb-writes-code:<branch-name> --title "..." --body "..." --reviewer cmraible
+gh pr merge <number> --repo <owner>/<repo> --auto --squash
 \`\`\`
 
 Send an \`[action:Created PR] #123\` activity.
@@ -348,6 +392,7 @@ Send an \`[action:Created PR] #123\` activity.
 ## Important Notes
 - You have \`LINEAR_ACCESS_TOKEN\` in your environment for API calls
 - You have GitHub access via \`gh\` CLI (authenticated as seb-writes-code)
+- **CRITICAL: PRs must target \`cmraible/*\` repos (e.g. \`cmraible/seb\`, \`cmraible/sandctl\`). NEVER open PRs against \`qwibitai/nanoclaw\` or any other upstream.** The \`cmraible/seb\` repo is a fork of \`qwibitai/nanoclaw\`, so \`gh pr create\` without \`--repo\` will incorrectly target \`qwibitai/nanoclaw\`. You MUST always pass \`--repo cmraible/<repo>\`.
 - Always create a new branch for your work, never push to main
 - If the issue requires changes you can't make (infrastructure, secrets, etc.), explain what's needed in your final response
 `;

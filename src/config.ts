@@ -59,7 +59,7 @@ export const IPC_POLL_INTERVAL = 1000;
 export const IDLE_TIMEOUT = parseIntEnv('IDLE_TIMEOUT', 1800000); // 30min default — how long to keep container alive after last result
 export const MAX_CONCURRENT_CONTAINERS = Math.max(
   1,
-  parseIntEnv('MAX_CONCURRENT_CONTAINERS', 5),
+  parseIntEnv('MAX_CONCURRENT_CONTAINERS', 10),
 );
 
 export function escapeRegex(str: string): string {
@@ -101,6 +101,10 @@ function resolveConfigTimezone(): string {
 export const TIMEZONE = resolveConfigTimezone();
 
 // Telegram configuration
+// Web App configuration
+export const WEBAPP_PORT = parseIntEnv('WEBAPP_PORT', 3002);
+export const WEBAPP_URL = process.env.WEBAPP_URL || '';
+
 export const TELEGRAM_BOT_TOKEN =
   process.env.TELEGRAM_BOT_TOKEN || envConfig.TELEGRAM_BOT_TOKEN || '';
 export const TELEGRAM_BOT_POOL = (

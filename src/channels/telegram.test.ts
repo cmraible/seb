@@ -6,6 +6,7 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 vi.mock('../config.js', () => ({
   ASSISTANT_NAME: 'Andy',
   TRIGGER_PATTERN: /^@Andy\b/i,
+  WEBAPP_URL: '',
 }));
 
 // Mock logger
@@ -911,6 +912,103 @@ describe('TelegramChannel', () => {
       await handler(ctx);
 
       expect(ctx.reply).toHaveBeenCalledWith('Andy is online.');
+    });
+
+    it('/rc forwards through onMessage with command text', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const handler = currentBot().commandHandlers.get('rc')!;
+      expect(handler).toBeDefined();
+
+      const ctx = {
+        chat: { id: 100200300, type: 'group' as const, title: 'Test Group' },
+        from: { id: 42, first_name: 'Alice', username: 'alice' },
+        message: { message_id: 999, date: 1700000000 },
+      };
+
+      await handler(ctx);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({
+          content: '/rc',
+          sender: '42',
+          sender_name: 'Alice',
+        }),
+      );
+    });
+
+    it('/rcend forwards through onMessage with /rcend text', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const handler = currentBot().commandHandlers.get('rcend')!;
+      expect(handler).toBeDefined();
+
+      const ctx = {
+        chat: { id: 100200300, type: 'group' as const, title: 'Test Group' },
+        from: { id: 42, first_name: 'Alice' },
+        message: { message_id: 1000, date: 1700000000 },
+      };
+
+      await handler(ctx);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({
+          content: '/rcend',
+        }),
+      );
+    });
+
+    it('/rc_end forwards through onMessage with /rc-end text', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const handler = currentBot().commandHandlers.get('rc_end')!;
+      expect(handler).toBeDefined();
+
+      const ctx = {
+        chat: { id: 100200300, type: 'group' as const, title: 'Test Group' },
+        from: { id: 42, first_name: 'Alice' },
+        message: { message_id: 1001, date: 1700000000 },
+      };
+
+      await handler(ctx);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({
+          content: '/rc-end',
+        }),
+      );
+    });
+
+    it('/rc includes topic ID in JID when present', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const handler = currentBot().commandHandlers.get('rc')!;
+      const ctx = {
+        chat: { id: 100200300, type: 'group' as const, title: 'Test Group' },
+        from: { id: 42, first_name: 'Alice' },
+        message: { message_id: 999, date: 1700000000, message_thread_id: 55 },
+      };
+
+      await handler(ctx);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300:55',
+        expect.objectContaining({
+          content: '/rc',
+          chat_jid: 'tg:100200300:55',
+        }),
+      );
     });
   });
 

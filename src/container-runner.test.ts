@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
-import { PassThrough } from 'stream';
 
 // Sentinel markers must match container-runner.ts
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -11,11 +10,20 @@ vi.mock('./config.js', () => ({
   CONTAINER_IMAGE: 'nanoclaw-agent:latest',
   CONTAINER_MAX_OUTPUT_SIZE: 10485760,
   CONTAINER_TIMEOUT: 1800000, // 30min
+  CREDENTIAL_PROXY_PORT: 3001,
   DATA_DIR: '/tmp/nanoclaw-test-data',
   GROUPS_DIR: '/tmp/nanoclaw-test-groups',
   IDLE_TIMEOUT: 1800000, // 30min
-  ONECLI_URL: 'http://localhost:10254',
+  ONECLI_URL: 'http://localhost:9999',
   TIMEZONE: 'America/Los_Angeles',
+}));
+
+// Mock OneCLI SDK
+vi.mock('@onecli-sh/sdk', () => ({
+  OneCLI: class {
+    getCredentials = vi.fn().mockResolvedValue({});
+    applyContainerConfig = vi.fn().mockReturnValue(Promise.resolve(true));
+  },
 }));
 
 // Mock logger
@@ -51,45 +59,44 @@ vi.mock('./mount-security.js', () => ({
   validateAdditionalMounts: vi.fn(() => []),
 }));
 
-// Mock OneCLI SDK
-vi.mock('@onecli-sh/sdk', () => ({
-  OneCLI: class {
-    applyContainerConfig = vi.fn().mockResolvedValue(true);
-    createAgent = vi.fn().mockResolvedValue({ id: 'test' });
-    ensureAgent = vi
-      .fn()
-      .mockResolvedValue({ name: 'test', identifier: 'test', created: true });
-  },
-}));
+// Create a controllable fake ChildProcess backed by EventEmitter + streams
+import { PassThrough } from 'stream';
+import fs from 'fs';
 
-// Create a controllable fake ChildProcess
 function createFakeProcess() {
-  const proc = new EventEmitter() as EventEmitter & {
-    stdin: PassThrough;
-    stdout: PassThrough;
-    stderr: PassThrough;
-    kill: ReturnType<typeof vi.fn>;
-    pid: number;
-  };
-  proc.stdin = new PassThrough();
-  proc.stdout = new PassThrough();
-  proc.stderr = new PassThrough();
-  proc.kill = vi.fn();
-  proc.pid = 12345;
+  const emitter = new EventEmitter();
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  const stdin = new PassThrough();
+
+  const proc = Object.assign(emitter, {
+    stdout,
+    stderr,
+    stdin,
+    pid: 12345,
+    killed: false,
+    kill: vi.fn(),
+  });
+
   return proc;
 }
 
-let fakeProc: ReturnType<typeof createFakeProcess>;
+let fakeProcess: ReturnType<typeof createFakeProcess>;
 
-// Mock child_process.spawn
+// Mock child_process: spawn returns our fake process, execFile is a no-op
 vi.mock('child_process', async () => {
   const actual =
     await vi.importActual<typeof import('child_process')>('child_process');
   return {
     ...actual,
-    spawn: vi.fn(() => fakeProc),
-    exec: vi.fn(
-      (_cmd: string, _opts: unknown, cb?: (err: Error | null) => void) => {
+    spawn: vi.fn(() => fakeProcess),
+    execFile: vi.fn(
+      (
+        _file: string,
+        _args: string[],
+        _opts: unknown,
+        cb?: (err: Error | null) => void,
+      ) => {
         if (cb) cb(null);
         return new EventEmitter();
       },
@@ -97,8 +104,14 @@ vi.mock('child_process', async () => {
   };
 });
 
-import { runContainerAgent, ContainerOutput } from './container-runner.js';
+import {
+  runContainerAgent,
+  ContainerOutput,
+  writeLogsSnapshot,
+  getChannelSkillDirs,
+} from './container-runner.js';
 import type { RegisteredGroup } from './types.js';
+import type { TaskRunLogEntry } from './container-runner.js';
 
 const testGroup: RegisteredGroup = {
   name: 'Test Group',
@@ -125,7 +138,7 @@ function emitOutputMarker(
 describe('container-runner timeout behavior', () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    fakeProc = createFakeProcess();
+    fakeProcess = createFakeProcess();
   });
 
   afterEach(() => {
@@ -141,8 +154,12 @@ describe('container-runner timeout behavior', () => {
       onOutput,
     );
 
+    // Flush async setup (OneCLI applyContainerConfig, buildContainerArgs, runtime.start)
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(1);
+
     // Emit output with a result
-    emitOutputMarker(fakeProc, {
+    emitOutputMarker(fakeProcess, {
       status: 'success',
       result: 'Here is my response',
       newSessionId: 'session-123',
@@ -155,7 +172,7 @@ describe('container-runner timeout behavior', () => {
     await vi.advanceTimersByTimeAsync(1830000);
 
     // Emit close event (as if container was stopped by the timeout)
-    fakeProc.emit('close', 137);
+    fakeProcess.emit('close', 137);
 
     // Let the promise resolve
     await vi.advanceTimersByTimeAsync(10);
@@ -177,11 +194,14 @@ describe('container-runner timeout behavior', () => {
       onOutput,
     );
 
+    // Flush async setup (OneCLI applyContainerConfig, runtime.start)
+    await vi.advanceTimersByTimeAsync(0);
+
     // No output emitted — fire the hard timeout
     await vi.advanceTimersByTimeAsync(1830000);
 
     // Emit close event
-    fakeProc.emit('close', 137);
+    fakeProcess.emit('close', 137);
 
     await vi.advanceTimersByTimeAsync(10);
 
@@ -189,6 +209,41 @@ describe('container-runner timeout behavior', () => {
     expect(result.status).toBe('error');
     expect(result.error).toContain('timed out');
     expect(onOutput).not.toHaveBeenCalled();
+  });
+
+  it('onOutput error does not hang the promise', async () => {
+    const onOutput = vi.fn(async () => {
+      throw new Error('sendMessage failed');
+    });
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+      onOutput,
+    );
+
+    // Flush async setup (OneCLI applyContainerConfig, buildContainerArgs, runtime.start)
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(1);
+
+    // Emit output — onOutput will throw
+    emitOutputMarker(fakeProcess, {
+      status: 'success',
+      result: 'Agent response',
+      newSessionId: 'session-err',
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Normal exit
+    fakeProcess.emit('close', 0);
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    // The promise should still resolve (not hang)
+    const result = await resultPromise;
+    expect(result.status).toBe('success');
+    expect(onOutput).toHaveBeenCalled();
   });
 
   it('normal exit after output resolves as success', async () => {
@@ -200,8 +255,11 @@ describe('container-runner timeout behavior', () => {
       onOutput,
     );
 
+    // Flush async setup (OneCLI applyContainerConfig, runtime.start)
+    await vi.advanceTimersByTimeAsync(0);
+
     // Emit output
-    emitOutputMarker(fakeProc, {
+    emitOutputMarker(fakeProcess, {
       status: 'success',
       result: 'Done',
       newSessionId: 'session-456',
@@ -210,12 +268,258 @@ describe('container-runner timeout behavior', () => {
     await vi.advanceTimersByTimeAsync(10);
 
     // Normal exit (no timeout)
-    fakeProc.emit('close', 0);
+    fakeProcess.emit('close', 0);
 
     await vi.advanceTimersByTimeAsync(10);
 
     const result = await resultPromise;
     expect(result.status).toBe('success');
     expect(result.newSessionId).toBe('session-456');
+  });
+});
+
+// --- writeLogsSnapshot ---
+
+describe('writeLogsSnapshot', () => {
+  const mockFs = vi.mocked(fs);
+
+  beforeEach(() => {
+    mockFs.mkdirSync.mockClear();
+    mockFs.writeFileSync.mockClear();
+    mockFs.existsSync.mockReturnValue(false);
+    (mockFs.readdirSync as ReturnType<typeof vi.fn>).mockReturnValue([]);
+  });
+
+  const sampleTaskLogs: TaskRunLogEntry[] = [
+    {
+      task_id: 'task-1',
+      run_at: '2024-06-01T00:00:00.000Z',
+      duration_ms: 100,
+      status: 'success',
+      error: null,
+      group_folder: 'test-group',
+    },
+  ];
+
+  it('creates IPC directory and writes snapshot file', () => {
+    writeLogsSnapshot('test-group', false, sampleTaskLogs, ['test-group']);
+
+    expect(mockFs.mkdirSync).toHaveBeenCalledWith(
+      expect.stringContaining('test-group'),
+      { recursive: true },
+    );
+    expect(mockFs.writeFileSync).toHaveBeenCalledOnce();
+
+    const writtenPath = vi.mocked(mockFs.writeFileSync).mock.calls[0][0];
+    expect(String(writtenPath)).toContain('recent_logs.json');
+  });
+
+  it('includes task_runs in snapshot JSON', () => {
+    writeLogsSnapshot('test-group', false, sampleTaskLogs, ['test-group']);
+
+    const writtenData = JSON.parse(
+      vi.mocked(mockFs.writeFileSync).mock.calls[0][1] as string,
+    );
+    expect(writtenData.task_runs).toHaveLength(1);
+    expect(writtenData.task_runs[0].task_id).toBe('task-1');
+    expect(writtenData.generated_at).toBeDefined();
+  });
+
+  it('returns empty container_runs when no log directory exists', () => {
+    vi.mocked(mockFs.existsSync).mockReturnValue(false);
+
+    writeLogsSnapshot('test-group', false, [], ['test-group']);
+
+    const writtenData = JSON.parse(
+      vi.mocked(mockFs.writeFileSync).mock.calls[0][1] as string,
+    );
+    expect(writtenData.container_runs).toHaveLength(0);
+  });
+
+  it('parses container log files when log directory exists', () => {
+    vi.mocked(mockFs.existsSync).mockReturnValue(true);
+    (mockFs.readdirSync as ReturnType<typeof vi.fn>).mockReturnValue([
+      'container-2024-06-01.log',
+    ]);
+    vi.mocked(mockFs.readFileSync).mockReturnValue(
+      [
+        'Timestamp: 2024-06-01T00:00:00.000Z',
+        'Duration: 1500',
+        'Exit Code: 0',
+        'Group: test-group',
+      ].join('\n'),
+    );
+
+    writeLogsSnapshot('test-group', false, [], ['test-group']);
+
+    const writtenData = JSON.parse(
+      vi.mocked(mockFs.writeFileSync).mock.calls[0][1] as string,
+    );
+    expect(writtenData.container_runs).toHaveLength(1);
+    expect(writtenData.container_runs[0]).toEqual({
+      timestamp: '2024-06-01T00:00:00.000Z',
+      duration_ms: 1500,
+      exit_code: 0,
+      group: 'test-group',
+      stderr_preview: null,
+    });
+  });
+
+  it('extracts stderr preview for non-zero exit codes', () => {
+    vi.mocked(mockFs.existsSync).mockReturnValue(true);
+    (mockFs.readdirSync as ReturnType<typeof vi.fn>).mockReturnValue([
+      'container-2024-06-01.log',
+    ]);
+    vi.mocked(mockFs.readFileSync).mockReturnValue(
+      [
+        'Timestamp: 2024-06-01T00:00:00.000Z',
+        'Duration: 500',
+        'Exit Code: 1',
+        'Group: test-group',
+        '=== Stderr ===',
+        'Error: something went wrong',
+        '=== End ===',
+      ].join('\n'),
+    );
+
+    writeLogsSnapshot('test-group', false, [], ['test-group']);
+
+    const writtenData = JSON.parse(
+      vi.mocked(mockFs.writeFileSync).mock.calls[0][1] as string,
+    );
+    expect(writtenData.container_runs[0].stderr_preview).toBe(
+      'Error: something went wrong',
+    );
+  });
+
+  it('does not extract stderr for zero exit codes', () => {
+    vi.mocked(mockFs.existsSync).mockReturnValue(true);
+    (mockFs.readdirSync as ReturnType<typeof vi.fn>).mockReturnValue([
+      'container-2024-06-01.log',
+    ]);
+    vi.mocked(mockFs.readFileSync).mockReturnValue(
+      [
+        'Timestamp: 2024-06-01T00:00:00.000Z',
+        'Duration: 500',
+        'Exit Code: 0',
+        'Group: test-group',
+        '=== Stderr ===',
+        'Some warning output',
+      ].join('\n'),
+    );
+
+    writeLogsSnapshot('test-group', false, [], ['test-group']);
+
+    const writtenData = JSON.parse(
+      vi.mocked(mockFs.writeFileSync).mock.calls[0][1] as string,
+    );
+    expect(writtenData.container_runs[0].stderr_preview).toBeNull();
+  });
+
+  it('main group aggregates logs from all groups', () => {
+    vi.mocked(mockFs.existsSync).mockReturnValue(true);
+
+    // Return different files per directory call
+    let callCount = 0;
+    (mockFs.readdirSync as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      callCount++;
+      return [`container-run-${callCount}.log`];
+    });
+
+    vi.mocked(mockFs.readFileSync).mockImplementation((filePath) => {
+      const p = String(filePath);
+      if (p.includes('run-1')) {
+        return 'Timestamp: 2024-06-01T00:01:00.000Z\nDuration: 100\nExit Code: 0\nGroup: group-a';
+      }
+      return 'Timestamp: 2024-06-01T00:02:00.000Z\nDuration: 200\nExit Code: 0\nGroup: group-b';
+    });
+
+    writeLogsSnapshot('main-group', true, [], ['group-a', 'group-b']);
+
+    const writtenData = JSON.parse(
+      vi.mocked(mockFs.writeFileSync).mock.calls[0][1] as string,
+    );
+    // Main group should see runs from both groups
+    expect(writtenData.container_runs).toHaveLength(2);
+    // Sorted by timestamp descending
+    expect(writtenData.container_runs[0].group).toBe('group-b');
+    expect(writtenData.container_runs[1].group).toBe('group-a');
+  });
+
+  it('non-main group sees only its own logs', () => {
+    vi.mocked(mockFs.existsSync).mockReturnValue(true);
+    vi.mocked(mockFs.readFileSync).mockReturnValue(
+      'Timestamp: 2024-06-01T00:00:00.000Z\nDuration: 100\nExit Code: 0\nGroup: my-group',
+    );
+
+    // Clear then set return value to count only calls from this invocation
+    (mockFs.readdirSync as ReturnType<typeof vi.fn>).mockClear();
+    (mockFs.readdirSync as ReturnType<typeof vi.fn>).mockReturnValue([
+      'container-2024-06-01.log',
+    ]);
+
+    writeLogsSnapshot('my-group', false, [], ['my-group', 'other-group']);
+
+    // readdirSync should only be called for my-group's logs dir, not other-group's
+    const readdirCalls = vi
+      .mocked(mockFs.readdirSync)
+      .mock.calls.map((c) => String(c[0]));
+    expect(readdirCalls).toHaveLength(1);
+    expect(readdirCalls[0]).toContain('my-group');
+  });
+});
+
+describe('getChannelSkillDirs', () => {
+  function makeGroup(
+    folder: string,
+    metadata?: Record<string, string>,
+  ): RegisteredGroup {
+    return {
+      name: 'Test',
+      folder,
+      trigger: '@test',
+      added_at: new Date().toISOString(),
+      metadata,
+    };
+  }
+
+  it('returns skills-linear for linear_ folders', () => {
+    expect(getChannelSkillDirs(makeGroup('linear_chr-86'))).toEqual([
+      'skills-linear',
+    ]);
+  });
+
+  it('returns skills-github-pr for github_ pull_request folders', () => {
+    expect(
+      getChannelSkillDirs(
+        makeGroup('github_cmraible-seb-42', { type: 'pull_request' }),
+      ),
+    ).toEqual(['skills-github-pr']);
+  });
+
+  it('returns skills-github-issue for github_ issue folders', () => {
+    expect(
+      getChannelSkillDirs(
+        makeGroup('github_cmraible-seb-10', { type: 'issue' }),
+      ),
+    ).toEqual(['skills-github-issue']);
+  });
+
+  it('returns empty for github_ folders with unknown type', () => {
+    expect(
+      getChannelSkillDirs(makeGroup('github_cmraible-seb', { type: 'repo' })),
+    ).toEqual([]);
+  });
+
+  it('returns empty for github_ folders without metadata', () => {
+    expect(getChannelSkillDirs(makeGroup('github_cmraible-seb'))).toEqual([]);
+  });
+
+  it('returns empty for telegram folders', () => {
+    expect(getChannelSkillDirs(makeGroup('telegram_dev-team'))).toEqual([]);
+  });
+
+  it('returns empty for whatsapp folders', () => {
+    expect(getChannelSkillDirs(makeGroup('whatsapp_family'))).toEqual([]);
   });
 });

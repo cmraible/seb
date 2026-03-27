@@ -1,6 +1,6 @@
 import { Api, Bot, InlineKeyboard } from 'grammy';
 
-import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
+import { ASSISTANT_NAME, TRIGGER_PATTERN, WEBAPP_URL } from '../config.js';
 import { readEnvFile } from '../env.js';
 import { formatNextRun, formatSchedule } from '../format-schedule.js';
 import { logger } from '../logger.js';
@@ -94,8 +94,43 @@ export class TelegramChannel implements Channel {
         'Restart requested via /restart command',
       );
       await ctx.reply('Restarting NanoClaw...');
-      this.opts.requestRestart();
+      // Delay restart so grammy can advance the Telegram update offset.
+      // Without this, the /restart update is re-delivered on every startup → bootloop.
+      setTimeout(() => this.opts.requestRestart!(), 500);
     });
+
+    // Remote control commands — forward through onMessage so the handler
+    // in index.ts can intercept them (main-group only guard is there).
+    const forwardCommand = (commandText: string) => async (ctx: any) => {
+      const topicId = (ctx.message as any)?.message_thread_id;
+      const chatJid = topicId
+        ? `tg:${ctx.chat.id}:${topicId}`
+        : `tg:${ctx.chat.id}`;
+      const timestamp = new Date(ctx.message.date * 1000).toISOString();
+      const senderName =
+        ctx.from?.first_name ||
+        ctx.from?.username ||
+        ctx.from?.id?.toString() ||
+        'Unknown';
+      const sender = ctx.from?.id?.toString() || '';
+      const chatName =
+        ctx.chat.type === 'private'
+          ? senderName
+          : (ctx.chat as any).title || chatJid;
+      this.opts.onChatMetadata(chatJid, timestamp, chatName);
+      this.opts.onMessage(chatJid, {
+        id: ctx.message.message_id.toString(),
+        chat_jid: chatJid,
+        sender,
+        sender_name: senderName,
+        content: commandText,
+        timestamp,
+        is_from_me: false,
+      });
+    };
+    this.bot.command('rc', forwardCommand('/rc'));
+    this.bot.command('rcend', forwardCommand('/rcend'));
+    this.bot.command('rc_end', forwardCommand('/rc-end'));
 
     // Command to list and manage scheduled tasks
     this.bot.command('tasks', (ctx) => {
@@ -117,33 +152,37 @@ export class TelegramChannel implements Channel {
         jidToName.set(jid, group.name);
       }
 
-      const lines: string[] = ['📋 *Scheduled Tasks*\n'];
+      const lines: string[] = ['📋 *Scheduled Tasks*'];
       const keyboard = new InlineKeyboard();
 
       for (let i = 0; i < tasks.length; i++) {
         const t = tasks[i];
         const num = i + 1;
+        // Extract a meaningful summary: first line of the prompt, trimmed
+        const firstLine = t.prompt.split('\n')[0].trim();
         const preview =
-          t.prompt.length > 80 ? t.prompt.slice(0, 77) + '...' : t.prompt;
+          firstLine.length > 100 ? firstLine.slice(0, 97) + '...' : firstLine;
         const schedule = formatSchedule(t.schedule_type, t.schedule_value);
         const nextRun = formatNextRun(t.next_run);
         const groupName = jidToName.get(t.chat_jid);
 
-        let line = `*${num}.* ${preview}\n    ⏰ ${schedule}`;
+        let line = `*${num}.* ${preview}`;
+        line += `\n    ${schedule}`;
         if (nextRun) line += ` (next: ${nextRun})`;
+        line += ` · ${t.status}`;
         if (groupName) line += `\n    📍 ${groupName}`;
-        if (t.status === 'running') line += '\n    🔄 Running';
-        if (t.status === 'paused') line += '\n    ⏸ Paused';
         lines.push(line);
 
-        // Pause/resume button depending on status
-        if (t.status === 'paused') {
-          keyboard.text(`▶ ${num}`, `resume_task:${t.id}`);
-        } else {
-          keyboard.text(`⏸ ${num}`, `pause_task:${t.id}`);
+        // Only show action buttons for non-completed tasks
+        if (t.status !== 'completed') {
+          if (t.status === 'paused') {
+            keyboard.text(`▶ ${num}`, `resume_task:${t.id}`);
+          } else {
+            keyboard.text(`⏸ ${num}`, `pause_task:${t.id}`);
+          }
+          keyboard.text(`✕ ${num}`, `cancel_task:${t.id}`);
+          keyboard.row();
         }
-        keyboard.text(`✕ ${num}`, `cancel_task:${t.id}`);
-        keyboard.row();
       }
 
       ctx.reply(lines.join('\n\n'), {
@@ -367,6 +406,22 @@ export class TelegramChannel implements Channel {
     this.bot.catch((err) => {
       logger.error({ err: err.message }, 'Telegram bot error');
     });
+
+    // Set menu button to open the Web App if WEBAPP_URL is configured
+    if (WEBAPP_URL) {
+      try {
+        await this.bot.api.setChatMenuButton({
+          menu_button: {
+            type: 'web_app',
+            text: 'Manage',
+            web_app: { url: `${WEBAPP_URL}/app` },
+          },
+        });
+        logger.info({ url: WEBAPP_URL }, 'Telegram menu button set to Web App');
+      } catch (err) {
+        logger.warn({ err }, 'Failed to set Telegram menu button');
+      }
+    }
 
     // Start polling — returns a Promise that resolves when started
     return new Promise<void>((resolve) => {

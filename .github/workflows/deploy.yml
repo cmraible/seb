@@ -54,14 +54,117 @@ jobs:
           systemctl --user restart nanoclaw
           echo "Restarted via systemctl --user"
 
+      - name: Restart Logdy (if installed)
+        continue-on-error: true
+        run: |
+          if systemctl --user is-enabled logdy 2>/dev/null; then
+            systemctl --user restart logdy
+            echo "Restarted logdy"
+          else
+            echo "logdy service not installed, skipping"
+          fi
+
       - name: Verify service is running
         run: |
           sleep 5
           systemctl --user is-active nanoclaw
           echo "nanoclaw is active"
 
+      - name: Post-deploy smoke test
+        id: smoke_test
+        timeout-minutes: 1
+        run: |
+          set +e
+          cd "$PROJECT_ROOT"
+          SMOKE_RESULTS=""
+          SMOKE_OK=true
+
+          # Read webhook port from .env (default 3000)
+          WEBHOOK_PORT=$(grep '^WEBHOOK_PORT=' .env | cut -d= -f2- || echo "3000")
+          WEBHOOK_PORT=${WEBHOOK_PORT:-3000}
+
+          # 1. Health check — wait for HTTP server to be ready
+          MAX_RETRIES=12
+          HEALTH=""
+          for i in $(seq 1 $MAX_RETRIES); do
+            HEALTH=$(curl -sf "http://localhost:${WEBHOOK_PORT}/health" 2>/dev/null)
+            if [ $? -eq 0 ]; then
+              echo "Health check passed on attempt $i"
+              break
+            fi
+            echo "Waiting for server... ($i/$MAX_RETRIES)"
+            sleep 5
+          done
+
+          if [ -z "$HEALTH" ]; then
+            echo "::error::Health check failed after ${MAX_RETRIES} retries"
+            SMOKE_RESULTS="Health check: FAILED (server not responding)"
+            SMOKE_OK=false
+          else
+            STATUS=$(echo "$HEALTH" | jq -r '.status // "unknown"')
+            UPTIME=$(echo "$HEALTH" | jq -r '.uptime // "?"')
+            VERSION=$(echo "$HEALTH" | jq -r '.version // "?"')
+            CHANNELS=$(echo "$HEALTH" | jq -r '.channels // [] | join(", ")')
+            GROUPS=$(echo "$HEALTH" | jq -r '.groups // 0')
+            DB_OK=$(echo "$HEALTH" | jq -r '.dbOk // false')
+
+            SMOKE_RESULTS="Health: ${STATUS} (uptime: ${UPTIME}s, version: ${VERSION})
+          Channels: ${CHANNELS}
+          Groups: ${GROUPS}, DB: ${DB_OK}"
+
+            if [ "$STATUS" != "ok" ]; then
+              echo "::warning::Health status is ${STATUS}"
+              SMOKE_OK=false
+            fi
+            if [ "$DB_OK" != "true" ]; then
+              echo "::error::Database check failed"
+              SMOKE_OK=false
+            fi
+          fi
+
+          # 2. Verify webhook endpoints are reachable
+          HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" "http://localhost:${WEBHOOK_PORT}/linear/webhook" 2>/dev/null || echo "000")
+          SMOKE_RESULTS="${SMOKE_RESULTS}
+          Linear webhook: HTTP ${HTTP_CODE}"
+          echo "Linear webhook endpoint: HTTP $HTTP_CODE"
+
+          # 3. Verify Telegram bot token is valid
+          BOT_TOKEN=$(grep '^TELEGRAM_BOT_TOKEN=' .env | cut -d= -f2- || true)
+          if [ -n "$BOT_TOKEN" ]; then
+            BOT_INFO=$(curl -sf "https://api.telegram.org/bot${BOT_TOKEN}/getMe" 2>/dev/null)
+            BOT_OK=$(echo "$BOT_INFO" | jq -r '.ok // false')
+            BOT_USER=$(echo "$BOT_INFO" | jq -r '.result.username // "unknown"')
+            if [ "$BOT_OK" = "true" ]; then
+              SMOKE_RESULTS="${SMOKE_RESULTS}
+          Telegram bot: @${BOT_USER}"
+              echo "Telegram bot: @${BOT_USER}"
+            else
+              SMOKE_RESULTS="${SMOKE_RESULTS}
+          Telegram bot: FAILED"
+              echo "::error::Telegram bot token invalid"
+              SMOKE_OK=false
+            fi
+          else
+            SMOKE_RESULTS="${SMOKE_RESULTS}
+          Telegram bot: not configured"
+          fi
+
+          # Write results for subsequent steps
+          echo "SMOKE_RESULTS<<EOF" >> "$GITHUB_ENV"
+          echo "$SMOKE_RESULTS" >> "$GITHUB_ENV"
+          echo "EOF" >> "$GITHUB_ENV"
+
+          if [ "$SMOKE_OK" = "true" ]; then
+            echo "All smoke tests passed"
+            echo "SMOKE_OK=true" >> "$GITHUB_ENV"
+          else
+            echo "::error::One or more smoke tests failed"
+            echo "SMOKE_OK=false" >> "$GITHUB_ENV"
+            exit 1
+          fi
+
       - name: Post-deploy summary
-        if: github.event_name == 'push'
+        if: always() && github.event_name == 'push'
         continue-on-error: true
         run: |
           set +e
@@ -72,7 +175,14 @@ jobs:
           COMMIT_MSG=$(git log -1 --format="%s" "${{ github.sha }}")
           PR_NUMBER=$(echo "$COMMIT_MSG" | grep -oP '#\K\d+' | head -1 || true)
 
-          SUMMARY="Deploy complete: ${SHORT_SHA} ${COMMIT_MSG}"
+          if [ "$SMOKE_OK" = "false" ]; then
+            SUMMARY="⚠️ Deploy ${SHORT_SHA} — smoke test FAILED
+          ${COMMIT_MSG}
+          ${SMOKE_RESULTS}"
+          else
+            SUMMARY="✅ Deploy complete: ${SHORT_SHA} ${COMMIT_MSG}"
+          fi
+
           if [ -n "$PR_NUMBER" ]; then
             SUMMARY="${SUMMARY}
           https://github.com/${{ github.repository }}/pull/${PR_NUMBER}"

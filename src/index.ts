@@ -6,6 +6,18 @@ import path from 'path';
 
 import { OneCLI } from '@onecli-sh/sdk';
 
+const startTime = Date.now();
+
+// Cache git version at startup to avoid running shell commands on every /health request
+let cachedVersion = '';
+try {
+  cachedVersion = execSync('git log -1 --format="%h"', {
+    encoding: 'utf-8',
+  }).trim();
+} catch {
+  // not in a git repo
+}
+
 import {
   ASSISTANT_NAME,
   DEFAULT_TRIGGER,
@@ -28,6 +40,7 @@ import {
   ContainerOutput,
   runContainerAgent,
   writeGroupsSnapshot,
+  writeLogsSnapshot,
   writeTasksSnapshot,
 } from './container-runner.js';
 import {
@@ -42,6 +55,8 @@ import {
   getAllTasks,
   getMessagesSince,
   getNewMessages,
+  getRecentTaskRunLogs,
+  getRegisteredGroup,
   getRouterState,
   initDatabase,
   setRegisteredGroup,
@@ -53,7 +68,11 @@ import {
   updateTask,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
-import { resolveGroupFolderPath } from './group-folder.js';
+import {
+  writeGroupTemplate,
+  resolveGroupFolderPath,
+  resolveGroupIpcPath,
+} from './group-folder.js';
 import { initBotPool } from './channels/telegram.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
@@ -71,6 +90,7 @@ import {
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
+import { startWebApp } from './webapp.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -290,12 +310,48 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
+  // Clear any leftover send_message flag from a previous turn
+  const sendMessageFlagPath = path.join(
+    resolveGroupIpcPath(group.folder),
+    'flags',
+    'send_message_called',
+  );
+  try {
+    fs.unlinkSync(sendMessageFlagPath);
+  } catch {
+    // Flag doesn't exist — expected
+  }
+
   const output = await runAgent(
     group,
     prompt,
     chatJid,
     ackContext,
     async (result) => {
+      // Streaming activity updates — only forward to Linear channels (agent sessions)
+      // Other channels (Telegram, WhatsApp, etc.) don't use these activity prefixes
+      if (result.activity && chatJid.startsWith('linear:')) {
+        const { type, content, action } = result.activity;
+        let activityText: string;
+        if (type === 'action' && action) {
+          activityText = `[action:${action}] ${content}`;
+        } else {
+          activityText = `[thought] ${content}`;
+        }
+        try {
+          await channel.sendMessage(chatJid, activityText);
+        } catch (err) {
+          logger.warn(
+            { group: group.name, activityType: type, err },
+            'Failed to send activity update',
+          );
+        }
+        return;
+      } else if (result.activity) {
+        // Non-Linear channels: silently skip activity updates
+        return;
+      }
+
       // Streaming output callback — called for each agent result
       if (result.result) {
         const raw =
@@ -306,11 +362,28 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
         logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
         if (text) {
-          await channel.sendMessage(chatJid, text);
-          outputSentToUser = true;
+          // If the agent already sent messages via send_message, suppress the
+          // final output to avoid duplicate messages (see #165).
+          const flagPath = path.join(
+            resolveGroupIpcPath(group.folder),
+            'flags',
+            'send_message_called',
+          );
+          if (fs.existsSync(flagPath)) {
+            logger.info(
+              { group: group.name },
+              'Suppressing agent output — send_message was already called',
+            );
+            outputSentToUser = true; // Still mark as sent to prevent cursor rollback
+          } else {
+            await channel.sendMessage(chatJid, text);
+            outputSentToUser = true;
+          }
         }
         // Only reset idle timer on actual results, not session-update markers (result: null)
         resetIdleTimer();
+        // Notify queue this container is idle — allows preemption if other groups are waiting
+        queue.notifyIdle(chatJid);
       }
 
       if (result.status === 'error') {
@@ -383,6 +456,15 @@ async function runAgent(
     isMain,
     availableGroups,
     new Set(Object.keys(registeredGroups)),
+  );
+
+  // Update recent logs snapshot for container to read
+  const taskRunLogs = getRecentTaskRunLogs(isMain ? null : group.folder, 20);
+  writeLogsSnapshot(
+    group.folder,
+    isMain,
+    taskRunLogs,
+    Object.values(registeredGroups).map((g) => g.folder),
   );
 
   // Wrap onOutput to track session ID from streamed results
@@ -585,8 +667,10 @@ async function main(): Promise<void> {
   let webhookServer: http.Server | null = null;
 
   // Graceful shutdown handlers
+  let webAppServer: import('http').Server | null = null;
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
+    webAppServer?.close();
     if (webhookServer) webhookServer.close();
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
@@ -640,9 +724,25 @@ async function main(): Promise<void> {
   // Shared Express app for webhook channels
   const webhookApp = express();
 
-  // Shared health endpoint
+  // Health endpoint — used by deploy smoke tests and monitoring
   webhookApp.get('/health', (_req, res) => {
-    res.json({ status: 'ok', channels: channels.map((c) => c.name) });
+    let dbOk = false;
+    let groupCount = 0;
+    try {
+      groupCount = Object.keys(registeredGroups).length;
+      dbOk = groupCount >= 0; // DB is accessible if this doesn't throw
+    } catch {
+      // DB not accessible
+    }
+
+    res.json({
+      status: dbOk ? 'ok' : 'degraded',
+      uptime: Math.floor((Date.now() - startTime) / 1000),
+      version: cachedVersion,
+      channels: channels.map((c) => c.name),
+      groups: groupCount,
+      dbOk,
+    });
   });
 
   // Channel callbacks (shared by all channels)
@@ -703,6 +803,9 @@ async function main(): Promise<void> {
     getActiveTasks: () =>
       getAllTasks().filter(
         (t) =>
+          // Show all recurring tasks (cron/interval) regardless of status,
+          // but hide completed one-shot tasks to avoid clutter
+          t.schedule_type !== 'once' ||
           t.status === 'active' ||
           t.status === 'running' ||
           t.status === 'paused',
@@ -734,12 +837,9 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Start shared webhook server if any webhook channel is active
-  const webhookChannelNames = ['github', 'linear'];
-  const hasWebhookChannel = channels.some((ch) =>
-    webhookChannelNames.includes(ch.name),
-  );
-  if (hasWebhookChannel) {
+  // Always start the HTTP server — provides /health for deploy verification
+  // and webhook endpoints for channels that need them (GitHub, Linear)
+  {
     const envVars = readEnvFile(['WEBHOOK_PORT']);
     const webhookPort = parseInt(
       process.env.WEBHOOK_PORT || envVars.WEBHOOK_PORT || '3000',
@@ -747,8 +847,8 @@ async function main(): Promise<void> {
     );
     webhookServer = await new Promise<http.Server>((resolve, reject) => {
       const server = webhookApp.listen(webhookPort, () => {
-        logger.info({ port: webhookPort }, 'Shared webhook server listening');
-        console.log(`\n  Webhooks: http://localhost:${webhookPort}`);
+        logger.info({ port: webhookPort }, 'HTTP server listening');
+        console.log(`\n  HTTP: http://localhost:${webhookPort}`);
         resolve(server);
       });
       server.on('error', reject);
@@ -759,6 +859,19 @@ async function main(): Promise<void> {
   if (TELEGRAM_BOT_POOL.length > 0) {
     await initBotPool(TELEGRAM_BOT_POOL);
   }
+
+  // Start Telegram Web App server
+  const { WEBAPP_PORT } = await import('./config.js');
+  const { deleteRegisteredGroup } = await import('./db.js');
+  webAppServer = await startWebApp(WEBAPP_PORT, {
+    registeredGroups: () => registeredGroups,
+    registerGroup,
+    deleteGroup: (jid: string) => {
+      delete registeredGroups[jid];
+      deleteRegisteredGroup(jid);
+      logger.info({ jid }, 'Group unregistered via webapp');
+    },
+  });
 
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({

@@ -31,6 +31,25 @@ import { RegisteredGroup } from './types.js';
 
 const onecli = new OneCLI({ url: ONECLI_URL });
 
+/**
+ * Returns channel-specific skill directory names for a group based on its
+ * folder prefix and metadata. These are copied into the container alongside
+ * the global skills.
+ */
+export function getChannelSkillDirs(group: RegisteredGroup): string[] {
+  const dirs: string[] = [];
+
+  if (group.folder.startsWith('linear_')) {
+    dirs.push('skills-linear');
+  } else if (group.folder.startsWith('github_')) {
+    const type = group.metadata?.type;
+    if (type === 'pull_request') dirs.push('skills-github-pr');
+    else if (type === 'issue') dirs.push('skills-github-issue');
+  }
+
+  return dirs;
+}
+
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
@@ -52,6 +71,13 @@ export interface ContainerOutput {
   result: string | null;
   newSessionId?: string;
   error?: string;
+  /** Streaming activity update (tool calls, thinking) — not a final result */
+  activity?: {
+    type: 'thought' | 'action';
+    content: string;
+    /** For action type: tool/action name */
+    action?: string;
+  };
 }
 
 interface VolumeMount {
@@ -161,6 +187,22 @@ function buildVolumeMounts(
       fs.cpSync(srcDir, dstDir, { recursive: true });
     }
   }
+
+  // Channel-specific skills (e.g. skills-linear/, skills-github-pr/)
+  for (const dirName of getChannelSkillDirs(group)) {
+    const src = path.join(process.cwd(), 'container', dirName);
+    if (!fs.existsSync(src)) continue;
+    for (const skillDir of fs.readdirSync(src)) {
+      const srcDir = path.join(src, skillDir);
+      if (!fs.statSync(srcDir).isDirectory()) continue;
+      const dstDir = path.join(skillsDst, skillDir);
+      if (fs.existsSync(dstDir)) {
+        logger.debug(`Channel skill "${skillDir}" overrides global skill`);
+      }
+      fs.cpSync(srcDir, dstDir, { recursive: true });
+    }
+  }
+
   mounts.push({
     hostPath: groupSessionsDir,
     containerPath: '/home/node/.claude',
@@ -443,7 +485,14 @@ export async function runContainerAgent(
             resetTimeout();
             // Call onOutput for all markers (including null results)
             // so idle timers start even for "silent" query completions.
-            outputChain = outputChain.then(() => onOutput(parsed));
+            outputChain = outputChain
+              .then(() => onOutput(parsed))
+              .catch((err) => {
+                logger.warn(
+                  { group: group.name, error: err },
+                  'onOutput callback failed',
+                );
+              });
           } catch (err) {
             logger.warn(
               { group: group.name, error: err },
@@ -788,6 +837,133 @@ export function writeGroupsSnapshot(
       {
         groups: visibleGroups,
         lastSync: new Date().toISOString(),
+      },
+      null,
+      2,
+    ),
+  );
+}
+
+export interface ContainerRunLogEntry {
+  timestamp: string;
+  duration_ms: number;
+  exit_code: number;
+  group: string;
+  stderr_preview: string | null;
+}
+
+export interface TaskRunLogEntry {
+  task_id: string;
+  run_at: string;
+  duration_ms: number;
+  status: string;
+  error: string | null;
+  group_folder: string;
+}
+
+/**
+ * Parse container log files to extract structured metadata.
+ * Reads the header fields from each log file without loading full stderr/stdout.
+ */
+function parseContainerLogs(
+  groupFolder: string,
+  limit: number,
+): ContainerRunLogEntry[] {
+  const groupDir = resolveGroupFolderPath(groupFolder);
+  const logsDir = path.join(groupDir, 'logs');
+
+  if (!fs.existsSync(logsDir)) return [];
+
+  const logFiles = fs
+    .readdirSync(logsDir)
+    .filter((f) => f.startsWith('container-') && f.endsWith('.log'))
+    .sort()
+    .reverse()
+    .slice(0, limit);
+
+  const entries: ContainerRunLogEntry[] = [];
+
+  for (const file of logFiles) {
+    try {
+      const content = fs.readFileSync(path.join(logsDir, file), 'utf-8');
+      const lines = content.split('\n');
+
+      let timestamp = '';
+      let duration = 0;
+      let exitCode = 0;
+      let group = '';
+      let stderrPreview: string | null = null;
+
+      for (const line of lines) {
+        if (line.startsWith('Timestamp: ')) timestamp = line.slice(11);
+        else if (line.startsWith('Duration: '))
+          duration = parseInt(line.slice(10), 10) || 0;
+        else if (line.startsWith('Exit Code: '))
+          exitCode = parseInt(line.slice(11), 10) || 0;
+        else if (line.startsWith('Group: ')) group = line.slice(7);
+      }
+
+      // Extract first line of stderr if present and exit code non-zero
+      if (exitCode !== 0) {
+        const stderrIdx = lines.findIndex((l) => l.startsWith('=== Stderr'));
+        if (stderrIdx !== -1 && stderrIdx + 1 < lines.length) {
+          const stderrLine = lines[stderrIdx + 1]?.trim();
+          if (stderrLine && !stderrLine.startsWith('===')) {
+            stderrPreview = stderrLine.slice(0, 200);
+          }
+        }
+      }
+
+      if (timestamp) {
+        entries.push({
+          timestamp,
+          duration_ms: duration,
+          exit_code: exitCode,
+          group,
+          stderr_preview: stderrPreview,
+        });
+      }
+    } catch {
+      // Skip unparseable log files
+    }
+  }
+
+  return entries;
+}
+
+/**
+ * Write recent logs snapshot for the container to read.
+ * Main group sees all logs; non-main groups see only their own.
+ */
+export function writeLogsSnapshot(
+  groupFolder: string,
+  isMain: boolean,
+  taskRunLogs: TaskRunLogEntry[],
+  allGroupFolders: string[],
+): void {
+  const groupIpcDir = resolveGroupIpcPath(groupFolder);
+  fs.mkdirSync(groupIpcDir, { recursive: true });
+
+  // Container run logs: main sees all groups, others see only their own
+  let containerRuns: ContainerRunLogEntry[];
+  if (isMain) {
+    containerRuns = allGroupFolders
+      .flatMap((gf) => parseContainerLogs(gf, 5))
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+      .slice(0, 20);
+  } else {
+    containerRuns = parseContainerLogs(groupFolder, 20);
+  }
+
+  // Task run logs: already filtered by caller based on isMain
+  const logsFile = path.join(groupIpcDir, 'recent_logs.json');
+  fs.writeFileSync(
+    logsFile,
+    JSON.stringify(
+      {
+        container_runs: containerRuns,
+        task_runs: taskRunLogs,
+        generated_at: new Date().toISOString(),
       },
       null,
       2,
