@@ -166,15 +166,10 @@ export class TelegramChannel implements Channel {
         const nextRun = formatNextRun(t.next_run);
         const groupName = jidToName.get(t.chat_jid);
 
-        // Status indicator
-        let statusIcon = '✅';
-        if (t.status === 'running') statusIcon = '🔄';
-        else if (t.status === 'paused') statusIcon = '⏸';
-        else if (t.status === 'completed') statusIcon = '✔️';
-
-        let line = `${statusIcon} *${num}.* ${preview}`;
-        line += `\n    ⏰ ${schedule}`;
+        let line = `*${num}.* ${preview}`;
+        line += `\n    ${schedule}`;
         if (nextRun) line += ` (next: ${nextRun})`;
+        line += ` · _${t.status}_`;
         if (groupName) line += `\n    📍 ${groupName}`;
         lines.push(line);
 
