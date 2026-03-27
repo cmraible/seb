@@ -321,20 +321,18 @@ You communicate progress through your output messages. Use these prefixes to emi
 
 ## Workflow
 
-### Step 1: Understand the issue
-Read the issue details and any comments. The issue context from Linear is included in the messages you received.
+When you pick up an issue, drive it through the full pipeline autonomously:
 
-### Step 2: Find the right repository
-Use the \`gh\` CLI to determine which repo to work in. Common repos:
-- \`cmraible/seb\` — The main NanoClaw/Seb project
-- \`cmraible/sandctl\` — The sandctl CLI project
-- \`cmraible/rebased\` — The Rebased project
-
-If unsure, check the issue description for repo references, or look at related issues.
-
-### Step 3: Clone and branch
-
-**IMPORTANT**: You are authenticated as \`seb-writes-code\`, which is a fork-based workflow. Always clone from the target repo (e.g. \`cmraible/seb\`), NOT from \`seb-writes-code\`. Then push to the fork and open the PR against the target repo.
+### Phase 1: Research
+- Read the issue details and any comments carefully
+- Move the issue to **In Progress**: \`mcp__linear__save_issue({ id: "${ctx.identifier}", state: "In Progress" })\`
+- Send \`[thought]\` activities as you analyze the problem
+- Identify the right repository — common repos:
+  - \`cmraible/seb\` — The main NanoClaw/Seb project
+  - \`cmraible/sandctl\` — The sandctl CLI project
+  - \`cmraible/rebased\` — The Rebased project
+- If unsure, check the issue description for repo references or related issues
+- Clone the repo and explore the relevant code
 
 \`\`\`bash
 cd /tmp
@@ -342,30 +340,31 @@ gh repo clone <owner>/<repo> work-repo -- --depth=50
 cd work-repo
 git remote set-url origin https://x-access-token:$(gh auth token)@github.com/seb-writes-code/<repo>.git
 git remote add upstream https://github.com/<owner>/<repo>.git
-git checkout -b <branch-name>
 \`\`\`
 
 Send an \`[action:Cloning repository] owner/repo\` activity.
 
-### Step 3.5: Install dependencies
-Before making any commits, install project dependencies so git hooks (husky/lint-staged/prettier) are set up:
+### Phase 2: Plan
+- Design the implementation approach
+- Send a \`[thought]\` with your plan summary so the user can see your approach
+- Consider edge cases, test coverage, and impact on existing code
+
+### Phase 3: Implement
+- Create a feature branch: \`git checkout -b <branch-name>\`
+- Install dependencies before making any commits:
 \`\`\`bash
-# Detect package manager from lockfiles and install
 if [ -f bun.lockb ] || [ -f bun.lock ]; then bun install
 elif [ -f package-lock.json ]; then npm install
 elif [ -f yarn.lock ]; then yarn install
 elif [ -f pnpm-lock.yaml ]; then pnpm install
 fi
 \`\`\`
-This ensures pre-commit hooks run automatically and CI won't fail due to formatting issues.
-
-### Step 4: Implement
-- Read the relevant code to understand the codebase
 - Make the necessary changes
-- Test your changes if possible
-- Send \`[thought]\` activities as you reason through the implementation
+- Write/update tests when appropriate
+- Run the test suite to verify your changes
+- Send \`[thought]\` and \`[action]\` activities as you work
 
-### Step 5: Push and create PR
+### Phase 4: Push and create PR
 
 **CRITICAL**: Always specify \`--repo <owner>/<repo>\` and \`--head seb-writes-code:<branch>\` to ensure the PR targets the correct repo.
 
@@ -379,9 +378,9 @@ gh pr merge <number> --repo <owner>/<repo> --auto --squash
 
 Send an \`[action:Created PR] #123\` activity.
 
-### Step 6: Wrap up
+### Phase 5: Wrap up
 - Link the PR to the Linear issue
-- Do NOT change the issue status — linking a PR automatically sets it to "In Review", and it will move to "Done" when the PR is merged
+- Do NOT change the issue status after creating the PR — linking a PR automatically sets it to "In Review", and it will move to "Done" when the PR is merged
 - Send your final response (no prefix) summarizing what you did
 
 ## Available Tools

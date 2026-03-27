@@ -690,7 +690,7 @@ describe('LinearChannel', () => {
     });
   });
 
-  describe('status change auto-processing', () => {
+  describe('auto-launch on qualifying status', () => {
     it('calls requestProcessing when bot-delegated issue moves to started status', async () => {
       const botUserId = 'bot-user-123';
       const requestProcessing = vi.fn();
@@ -795,7 +795,7 @@ describe('LinearChannel', () => {
       expect(requestProcessing).toHaveBeenCalledWith('linear:ENG-41');
     });
 
-    it('does NOT call requestProcessing for non-started status types', async () => {
+    it('does NOT call requestProcessing for completed/canceled status types', async () => {
       const botUserId = 'bot-user-123';
       const requestProcessing = vi.fn();
       const existingGroup = {
@@ -951,6 +951,148 @@ describe('LinearChannel', () => {
 
       // Bot events are skipped entirely (before requestProcessing check)
       expect(requestProcessing).not.toHaveBeenCalled();
+    });
+
+    it('calls requestProcessing when bot-assigned issue moves to unstarted (Todo) status', async () => {
+      const botUserId = 'bot-user-123';
+      const requestProcessing = vi.fn();
+      opts = createTestOpts({
+        registeredGroups: vi.fn(() => ({
+          'linear:ENG-50': {
+            name: 'ENG-50',
+            folder: 'linear_eng-50',
+            trigger: '@Seb',
+            added_at: '2026-03-21T12:00:00Z',
+            requiresTrigger: false,
+            metadata: {
+              type: 'issue',
+              identifier: 'ENG-50',
+              title: 'Todo issue',
+            },
+          },
+        })),
+        requestProcessing,
+      });
+      channel = new LinearChannel(
+        SECRET,
+        'test-client-id',
+        'test-client-secret',
+        botUserId,
+        opts,
+      );
+      await channel.connect();
+      const result = await startServer(opts.app!);
+      server = result.server;
+      port = result.port;
+
+      const payload = {
+        type: 'Issue',
+        action: 'update',
+        data: {
+          identifier: 'ENG-50',
+          title: 'Todo issue',
+          assignee: { id: botUserId, name: 'Seb' },
+          state: { name: 'Todo', type: 'unstarted' },
+          team: { key: 'ENG' },
+          url: 'https://linear.app/test/issue/ENG-50',
+        },
+        actor: { id: 'user-1', name: 'Chris' },
+      };
+      await sendLinearWebhook(port, { payload, secret: SECRET });
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(requestProcessing).toHaveBeenCalledWith('linear:ENG-50');
+    });
+
+    it('calls requestProcessing on assignment change when metadata has qualifying stateType', async () => {
+      const botUserId = 'bot-user-123';
+      const requestProcessing = vi.fn();
+      opts = createTestOpts({
+        registeredGroups: vi.fn(() => ({
+          'linear:ENG-51': {
+            name: 'ENG-51',
+            folder: 'linear_eng-51',
+            trigger: '@Seb',
+            added_at: '2026-03-21T12:00:00Z',
+            requiresTrigger: true,
+            metadata: {
+              type: 'issue',
+              identifier: 'ENG-51',
+              title: 'Assign change issue',
+              stateType: 'unstarted',
+              status: 'Todo',
+            },
+          },
+        })),
+        requestProcessing,
+      });
+      channel = new LinearChannel(
+        SECRET,
+        'test-client-id',
+        'test-client-secret',
+        botUserId,
+        opts,
+      );
+      await channel.connect();
+      const result = await startServer(opts.app!);
+      server = result.server;
+      port = result.port;
+
+      // Assignment change — no state in payload, but metadata has stateType
+      const payload = {
+        type: 'Issue',
+        action: 'update',
+        data: {
+          identifier: 'ENG-51',
+          title: 'Assign change issue',
+          assignee: { id: botUserId, name: 'Seb' },
+          team: { key: 'ENG' },
+          url: 'https://linear.app/test/issue/ENG-51',
+        },
+        actor: { id: 'user-1', name: 'Chris' },
+      };
+      await sendLinearWebhook(port, { payload, secret: SECRET });
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(requestProcessing).toHaveBeenCalledWith('linear:ENG-51');
+    });
+
+    it('calls requestProcessing when new issue is created with bot assigned in Todo', async () => {
+      const botUserId = 'bot-user-123';
+      const requestProcessing = vi.fn();
+      opts = createTestOpts({
+        registeredGroups: vi.fn(() => ({})),
+        requestProcessing,
+      });
+      channel = new LinearChannel(
+        SECRET,
+        'test-client-id',
+        'test-client-secret',
+        botUserId,
+        opts,
+      );
+      await channel.connect();
+      const result = await startServer(opts.app!);
+      server = result.server;
+      port = result.port;
+
+      const payload = {
+        type: 'Issue',
+        action: 'create',
+        data: {
+          identifier: 'ENG-52',
+          title: 'New issue for bot',
+          assignee: { id: botUserId, name: 'Seb' },
+          state: { name: 'Todo', type: 'unstarted' },
+          team: { key: 'ENG' },
+          url: 'https://linear.app/test/issue/ENG-52',
+        },
+        actor: { id: 'user-1', name: 'Chris' },
+      };
+      await sendLinearWebhook(port, { payload, secret: SECRET });
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(requestProcessing).toHaveBeenCalledWith('linear:ENG-52');
     });
   });
 
