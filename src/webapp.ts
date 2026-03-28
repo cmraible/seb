@@ -250,6 +250,8 @@ export function startWebApp(
         status: t.status,
         next_run: t.next_run,
         group_folder: t.group_folder,
+        consecutive_silent_runs: t.consecutive_silent_runs || 0,
+        auto_backoff: !!t.auto_backoff,
       })),
     );
   });

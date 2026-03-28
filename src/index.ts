@@ -422,6 +422,8 @@ async function runAgent(
       schedule_value: t.schedule_value,
       status: t.status,
       next_run: t.next_run,
+      consecutive_silent_runs: t.consecutive_silent_runs,
+      auto_backoff: !!t.auto_backoff,
     })),
   );
 
@@ -928,6 +930,8 @@ async function main(): Promise<void> {
         schedule_value: t.schedule_value,
         status: t.status,
         next_run: t.next_run,
+        consecutive_silent_runs: t.consecutive_silent_runs,
+        auto_backoff: !!t.auto_backoff,
       }));
       for (const group of Object.values(registeredGroups)) {
         writeTasksSnapshot(group.folder, group.isMain === true, taskRows);

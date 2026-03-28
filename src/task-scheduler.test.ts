@@ -4,8 +4,31 @@ import { _initTestDatabase, createTask, getTaskById } from './db.js';
 import {
   _resetSchedulerLoopForTests,
   computeNextRun,
+  getBackoffMultiplier,
   startSchedulerLoop,
 } from './task-scheduler.js';
+import type { ScheduledTask } from './types.js';
+
+/** Helper to create a full ScheduledTask with sensible defaults */
+function makeTask(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
+  return {
+    id: 'test-task',
+    group_folder: 'test',
+    chat_jid: 'test@g.us',
+    prompt: 'test',
+    schedule_type: 'interval',
+    schedule_value: '60000',
+    context_mode: 'isolated',
+    next_run: new Date().toISOString(),
+    last_run: null,
+    last_result: null,
+    status: 'active',
+    created_at: '2026-01-01T00:00:00.000Z',
+    consecutive_silent_runs: 0,
+    auto_backoff: false,
+    ...overrides,
+  };
+}
 
 describe('task scheduler', () => {
   beforeEach(() => {
@@ -54,20 +77,12 @@ describe('task scheduler', () => {
 
   it('computeNextRun anchors interval tasks to scheduled time to prevent drift', () => {
     const scheduledTime = new Date(Date.now() - 2000).toISOString(); // 2s ago
-    const task = {
+    const task = makeTask({
       id: 'drift-test',
-      group_folder: 'test',
-      chat_jid: 'test@g.us',
-      prompt: 'test',
-      schedule_type: 'interval' as const,
-      schedule_value: '60000', // 1 minute
-      context_mode: 'isolated' as const,
+      schedule_type: 'interval',
+      schedule_value: '60000',
       next_run: scheduledTime,
-      last_run: null,
-      last_result: null,
-      status: 'active' as const,
-      created_at: '2026-01-01T00:00:00.000Z',
-    };
+    });
 
     const nextRun = computeNextRun(task);
     expect(nextRun).not.toBeNull();
@@ -78,38 +93,21 @@ describe('task scheduler', () => {
   });
 
   it('computeNextRun returns null for once-tasks', () => {
-    const task = {
+    const task = makeTask({
       id: 'once-test',
-      group_folder: 'test',
-      chat_jid: 'test@g.us',
-      prompt: 'test',
-      schedule_type: 'once' as const,
+      schedule_type: 'once',
       schedule_value: '2026-01-01T00:00:00.000Z',
-      context_mode: 'isolated' as const,
       next_run: new Date(Date.now() - 1000).toISOString(),
-      last_run: null,
-      last_result: null,
-      status: 'active' as const,
-      created_at: '2026-01-01T00:00:00.000Z',
-    };
+    });
 
     expect(computeNextRun(task)).toBeNull();
   });
 
   it('computeNextRun falls back to 60s for invalid interval values', () => {
-    const baseTask = {
+    const baseTask = makeTask({
       id: 'invalid-interval',
-      group_folder: 'test',
-      chat_jid: 'test@g.us',
-      prompt: 'test',
-      schedule_type: 'interval' as const,
-      context_mode: 'isolated' as const,
-      next_run: new Date().toISOString(),
-      last_run: null,
-      last_result: null,
-      status: 'active' as const,
-      created_at: '2026-01-01T00:00:00.000Z',
-    };
+      schedule_type: 'interval',
+    });
 
     const now = Date.now();
 
@@ -132,20 +130,11 @@ describe('task scheduler', () => {
   });
 
   it('computeNextRun returns null for invalid cron expressions instead of throwing', () => {
-    const task = {
+    const task = makeTask({
       id: 'bad-cron',
-      group_folder: 'test',
-      chat_jid: 'test@g.us',
-      prompt: 'test',
-      schedule_type: 'cron' as const,
+      schedule_type: 'cron',
       schedule_value: 'not a valid cron',
-      context_mode: 'isolated' as const,
-      next_run: new Date().toISOString(),
-      last_run: null,
-      last_result: null,
-      status: 'active' as const,
-      created_at: '2026-01-01T00:00:00.000Z',
-    };
+    });
 
     // Should return null instead of throwing, preventing tasks from
     // getting stuck in 'running' status when cron parsing fails
@@ -158,20 +147,12 @@ describe('task scheduler', () => {
     const missedBy = ms * 10;
     const scheduledTime = new Date(Date.now() - missedBy).toISOString();
 
-    const task = {
+    const task = makeTask({
       id: 'skip-test',
-      group_folder: 'test',
-      chat_jid: 'test@g.us',
-      prompt: 'test',
-      schedule_type: 'interval' as const,
+      schedule_type: 'interval',
       schedule_value: String(ms),
-      context_mode: 'isolated' as const,
       next_run: scheduledTime,
-      last_run: null,
-      last_result: null,
-      status: 'active' as const,
-      created_at: '2026-01-01T00:00:00.000Z',
-    };
+    });
 
     const nextRun = computeNextRun(task);
     expect(nextRun).not.toBeNull();
@@ -185,20 +166,12 @@ describe('task scheduler', () => {
 
   it('computeNextRun falls back to now + interval when next_run is null', () => {
     const ms = 60000;
-    const task = {
+    const task = makeTask({
       id: 'null-next-run',
-      group_folder: 'test',
-      chat_jid: 'test@g.us',
-      prompt: 'test',
-      schedule_type: 'interval' as const,
+      schedule_type: 'interval',
       schedule_value: String(ms),
-      context_mode: 'isolated' as const,
       next_run: null,
-      last_run: null,
-      last_result: null,
-      status: 'active' as const,
-      created_at: '2026-01-01T00:00:00.000Z',
-    };
+    });
 
     const before = Date.now();
     const nextRun = computeNextRun(task);
@@ -207,5 +180,176 @@ describe('task scheduler', () => {
     // Should be approximately now + interval
     expect(nextMs).toBeGreaterThanOrEqual(before + ms);
     expect(nextMs).toBeLessThanOrEqual(Date.now() + ms + 1000);
+  });
+
+  // --- Auto-backoff tests ---
+
+  describe('auto-backoff', () => {
+    it('getBackoffMultiplier returns 1 when auto_backoff is disabled', () => {
+      const task = makeTask({
+        auto_backoff: false,
+        consecutive_silent_runs: 5,
+      });
+      expect(getBackoffMultiplier(task)).toBe(1);
+    });
+
+    it('getBackoffMultiplier returns 1 when no silent runs', () => {
+      const task = makeTask({
+        auto_backoff: true,
+        consecutive_silent_runs: 0,
+      });
+      expect(getBackoffMultiplier(task)).toBe(1);
+    });
+
+    it('getBackoffMultiplier applies exponential backoff', () => {
+      expect(
+        getBackoffMultiplier(
+          makeTask({ auto_backoff: true, consecutive_silent_runs: 1 }),
+        ),
+      ).toBe(2);
+      expect(
+        getBackoffMultiplier(
+          makeTask({ auto_backoff: true, consecutive_silent_runs: 2 }),
+        ),
+      ).toBe(4);
+      expect(
+        getBackoffMultiplier(
+          makeTask({ auto_backoff: true, consecutive_silent_runs: 3 }),
+        ),
+      ).toBe(8);
+      expect(
+        getBackoffMultiplier(
+          makeTask({ auto_backoff: true, consecutive_silent_runs: 4 }),
+        ),
+      ).toBe(16);
+    });
+
+    it('getBackoffMultiplier caps at 2^4 = 16', () => {
+      expect(
+        getBackoffMultiplier(
+          makeTask({ auto_backoff: true, consecutive_silent_runs: 5 }),
+        ),
+      ).toBe(16);
+      expect(
+        getBackoffMultiplier(
+          makeTask({ auto_backoff: true, consecutive_silent_runs: 100 }),
+        ),
+      ).toBe(16);
+    });
+
+    it('computeNextRun applies backoff to interval tasks', () => {
+      const ms = 1800000; // 30 minutes
+      const task = makeTask({
+        schedule_type: 'interval',
+        schedule_value: String(ms),
+        auto_backoff: true,
+        consecutive_silent_runs: 2, // 4x multiplier
+        next_run: null,
+      });
+
+      const before = Date.now();
+      const nextRun = computeNextRun(task);
+      expect(nextRun).not.toBeNull();
+      const nextMs = new Date(nextRun!).getTime();
+      // Should be approximately now + 30min * 4 = 2 hours
+      expect(nextMs).toBeGreaterThanOrEqual(before + ms * 4);
+      expect(nextMs).toBeLessThanOrEqual(Date.now() + ms * 4 + 1000);
+    });
+
+    it('computeNextRun caps interval backoff at 16x base', () => {
+      const ms = 1800000; // 30 minutes
+      const task = makeTask({
+        schedule_type: 'interval',
+        schedule_value: String(ms),
+        auto_backoff: true,
+        consecutive_silent_runs: 10, // Would be 1024x without cap
+        next_run: null,
+      });
+
+      const before = Date.now();
+      const nextRun = computeNextRun(task);
+      expect(nextRun).not.toBeNull();
+      const nextMs = new Date(nextRun!).getTime();
+      // Should be capped at 16x = 8 hours
+      expect(nextMs).toBeGreaterThanOrEqual(before + ms * 16);
+      expect(nextMs).toBeLessThanOrEqual(Date.now() + ms * 16 + 1000);
+    });
+
+    it('computeNextRun does not apply backoff when auto_backoff is false', () => {
+      const ms = 60000;
+      const task = makeTask({
+        schedule_type: 'interval',
+        schedule_value: String(ms),
+        auto_backoff: false,
+        consecutive_silent_runs: 10,
+        next_run: null,
+      });
+
+      const before = Date.now();
+      const nextRun = computeNextRun(task);
+      expect(nextRun).not.toBeNull();
+      const nextMs = new Date(nextRun!).getTime();
+      // Should be approximately now + base interval, no backoff
+      expect(nextMs).toBeGreaterThanOrEqual(before + ms);
+      expect(nextMs).toBeLessThanOrEqual(Date.now() + ms + 1000);
+    });
+
+    it('computeNextRun applies backoff to cron tasks', () => {
+      // Use a cron expression that fires every 30 minutes
+      const task = makeTask({
+        schedule_type: 'cron',
+        schedule_value: '*/30 * * * *',
+        auto_backoff: true,
+        consecutive_silent_runs: 2, // 4x multiplier
+      });
+
+      const nextRun = computeNextRun(task);
+      expect(nextRun).not.toBeNull();
+      const nextMs = new Date(nextRun!).getTime();
+      const now = Date.now();
+      // With 4x backoff on a 30-min cron, effective delay is 2 hours
+      // The next run should be at least 2 hours from now
+      expect(nextMs).toBeGreaterThanOrEqual(now + 30 * 60 * 1000 * 4 - 60_000);
+    });
+
+    it('computeNextRun caps cron backoff at 4 hours', () => {
+      // Use a cron expression that fires every 30 minutes
+      const task = makeTask({
+        schedule_type: 'cron',
+        schedule_value: '*/30 * * * *',
+        auto_backoff: true,
+        consecutive_silent_runs: 10, // Would be huge without cap
+      });
+
+      const nextRun = computeNextRun(task);
+      expect(nextRun).not.toBeNull();
+      const nextMs = new Date(nextRun!).getTime();
+      const now = Date.now();
+      // Should be capped at 4 hours from now
+      const fourHoursMs = 4 * 60 * 60 * 1000;
+      expect(nextMs).toBeLessThanOrEqual(now + fourHoursMs + 60_000);
+    });
+
+    it('consecutive_silent_runs persists through DB round-trip', () => {
+      _initTestDatabase();
+      createTask({
+        id: 'backoff-db-test',
+        group_folder: 'test',
+        chat_jid: 'test@g.us',
+        prompt: 'test',
+        schedule_type: 'interval',
+        schedule_value: '60000',
+        context_mode: 'isolated',
+        next_run: new Date().toISOString(),
+        status: 'active',
+        created_at: '2026-01-01T00:00:00.000Z',
+        auto_backoff: true,
+      });
+
+      const task = getTaskById('backoff-db-test');
+      expect(task).toBeDefined();
+      expect(task!.consecutive_silent_runs).toBe(0);
+      expect(task!.auto_backoff).toBeTruthy();
+    });
   });
 });

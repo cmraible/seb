@@ -70,6 +70,8 @@ export interface ScheduledTask {
   last_result: string | null;
   status: 'active' | 'running' | 'paused' | 'completed';
   created_at: string;
+  consecutive_silent_runs: number; // Default 0, from DB
+  auto_backoff: boolean; // Default false, from DB
 }
 
 export interface TaskRunLog {
