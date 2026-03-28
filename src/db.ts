@@ -115,6 +115,22 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // Add auto-backoff columns if they don't exist (migration for existing DBs)
+  try {
+    database.exec(
+      `ALTER TABLE scheduled_tasks ADD COLUMN consecutive_silent_runs INTEGER DEFAULT 0`,
+    );
+  } catch {
+    /* column already exists */
+  }
+  try {
+    database.exec(
+      `ALTER TABLE scheduled_tasks ADD COLUMN auto_backoff INTEGER DEFAULT 0`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
   // Add is_bot_message column if it doesn't exist (migration for existing DBs)
   try {
     database.exec(
@@ -369,12 +385,16 @@ export function getMessagesSince(
 }
 
 export function createTask(
-  task: Omit<ScheduledTask, 'last_run' | 'last_result'>,
+  task: Omit<
+    ScheduledTask,
+    'last_run' | 'last_result' | 'consecutive_silent_runs' | 'auto_backoff'
+  > &
+    Partial<Pick<ScheduledTask, 'consecutive_silent_runs' | 'auto_backoff'>>,
 ): void {
   db.prepare(
     `
-    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, script, schedule_type, schedule_value, context_mode, next_run, status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, script, schedule_type, schedule_value, context_mode, next_run, status, created_at, auto_backoff)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `,
   ).run(
     task.id,
@@ -388,6 +408,7 @@ export function createTask(
     task.next_run,
     task.status,
     task.created_at,
+    task.auto_backoff ? 1 : 0,
   );
 }
 
@@ -491,15 +512,28 @@ export function updateTaskAfterRun(
   id: string,
   nextRun: string | null,
   lastResult: string,
+  consecutiveSilentRuns?: number,
 ): void {
   const now = new Date().toISOString();
-  db.prepare(
-    `
-    UPDATE scheduled_tasks
-    SET next_run = ?, last_run = ?, last_result = ?, status = CASE WHEN ? IS NULL THEN 'completed' ELSE 'active' END
-    WHERE id = ?
-  `,
-  ).run(nextRun, now, lastResult, nextRun, id);
+  if (consecutiveSilentRuns !== undefined) {
+    db.prepare(
+      `
+      UPDATE scheduled_tasks
+      SET next_run = ?, last_run = ?, last_result = ?, consecutive_silent_runs = ?,
+          status = CASE WHEN ? IS NULL THEN 'completed' ELSE 'active' END
+      WHERE id = ?
+    `,
+    ).run(nextRun, now, lastResult, consecutiveSilentRuns, nextRun, id);
+  } else {
+    db.prepare(
+      `
+      UPDATE scheduled_tasks
+      SET next_run = ?, last_run = ?, last_result = ?,
+          status = CASE WHEN ? IS NULL THEN 'completed' ELSE 'active' END
+      WHERE id = ?
+    `,
+    ).run(nextRun, now, lastResult, nextRun, id);
+  }
 }
 
 export function logTaskRun(log: TaskRunLog): void {

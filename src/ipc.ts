@@ -203,6 +203,7 @@ export async function processTaskIpc(
     schedule_value?: string;
     context_mode?: string;
     script?: string;
+    auto_backoff?: boolean;
     groupFolder?: string;
     chatJid?: string;
     targetJid?: string;
@@ -316,6 +317,8 @@ export async function processTaskIpc(
           next_run: nextRun,
           status: 'active',
           created_at: new Date().toISOString(),
+          consecutive_silent_runs: 0,
+          auto_backoff: data.auto_backoff === true,
         });
         logger.info(
           { taskId, sourceGroup, targetFolder, contextMode },

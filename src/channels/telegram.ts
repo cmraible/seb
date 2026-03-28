@@ -295,7 +295,12 @@ export class TelegramChannel implements Channel {
 
         let line = `*${num}.* ${preview}`;
         line += `\n    ${schedule}`;
-        if (nextRun) line += ` (next: ${nextRun})`;
+        if (t.auto_backoff && t.consecutive_silent_runs > 0) {
+          const backoffNext = formatNextRun(t.next_run);
+          line += ` (backed off to ${backoffNext}, ${t.consecutive_silent_runs} silent runs)`;
+        } else if (nextRun) {
+          line += ` (next: ${nextRun})`;
+        }
         line += ` · ${t.status}`;
         if (groupName) line += `\n    📍 ${groupName}`;
         lines.push(line);

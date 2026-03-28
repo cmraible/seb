@@ -22,10 +22,29 @@ import { logger } from './logger.js';
 import { ChildProcess } from 'child_process';
 import { RegisteredGroup, ScheduledTask } from './types.js';
 
+/** Maximum backoff power — 2^4 = 16x multiplier */
+const MAX_BACKOFF_POWER = 4;
+/** Maximum backoff interval for cron tasks: 4 hours */
+const MAX_BACKOFF_CRON_MS = 4 * 60 * 60 * 1000;
+/** Maximum backoff multiplier for interval tasks */
+const MAX_BACKOFF_INTERVAL_MULTIPLIER = 16;
+
+/**
+ * Calculate the backoff multiplier for a task based on consecutive silent runs.
+ * Returns 1 (no backoff) if auto_backoff is disabled or no silent runs.
+ */
+export function getBackoffMultiplier(task: ScheduledTask): number {
+  if (!task.auto_backoff || !task.consecutive_silent_runs) return 1;
+  return Math.pow(2, Math.min(task.consecutive_silent_runs, MAX_BACKOFF_POWER));
+}
+
 /**
  * Compute the next run time for a recurring task, anchored to the
  * task's scheduled time rather than Date.now() to prevent cumulative
  * drift on interval-based tasks.
+ *
+ * When auto_backoff is enabled and the task has consecutive silent runs,
+ * the effective interval is multiplied by 2^min(silent_runs, 4).
  *
  * Co-authored-by: @community-pr-601
  */
@@ -33,13 +52,32 @@ export function computeNextRun(task: ScheduledTask): string | null {
   if (task.schedule_type === 'once') return null;
 
   const now = Date.now();
+  const backoffMultiplier = getBackoffMultiplier(task);
 
   if (task.schedule_type === 'cron') {
     try {
       const interval = CronExpressionParser.parse(task.schedule_value, {
         tz: TIMEZONE,
       });
-      return interval.next().toISOString();
+      const naturalNext = interval.next().toISOString();
+      if (!naturalNext) return null;
+
+      if (backoffMultiplier <= 1) return naturalNext;
+
+      // For cron tasks, compute the base interval from consecutive cron ticks
+      const nextTime = new Date(naturalNext).getTime();
+      const secondNext = interval.next().toISOString();
+      if (!secondNext) return naturalNext; // fallback to natural
+      const baseInterval = new Date(secondNext).getTime() - nextTime;
+
+      const backoffDelay = Math.min(
+        baseInterval * backoffMultiplier,
+        MAX_BACKOFF_CRON_MS,
+      );
+      const backedOffTime = new Date(
+        Math.max(nextTime, now + backoffDelay),
+      ).toISOString();
+      return backedOffTime;
     } catch {
       logger.warn(
         { taskId: task.id, value: task.schedule_value },
@@ -59,16 +97,23 @@ export function computeNextRun(task: ScheduledTask): string | null {
       );
       return new Date(now + 60_000).toISOString();
     }
+
+    // Apply backoff: multiply effective interval, capped at 16x base
+    const effectiveMs =
+      backoffMultiplier > 1
+        ? Math.min(ms * backoffMultiplier, ms * MAX_BACKOFF_INTERVAL_MULTIPLIER)
+        : ms;
+
     // Anchor to the scheduled time, not now, to prevent drift.
     // Skip past any missed intervals so we always land in the future.
     const anchor = task.next_run ? new Date(task.next_run).getTime() : NaN;
     if (!anchor || anchor <= 0) {
       // next_run is null or invalid — fall back to now + interval
-      return new Date(now + ms).toISOString();
+      return new Date(now + effectiveMs).toISOString();
     }
-    let next = anchor + ms;
+    let next = anchor + effectiveMs;
     while (next <= now) {
-      next += ms;
+      next += effectiveMs;
     }
     return new Date(next).toISOString();
   }
@@ -160,6 +205,8 @@ async function runTask(
       schedule_value: t.schedule_value,
       status: t.status,
       next_run: t.next_run,
+      consecutive_silent_runs: t.consecutive_silent_runs,
+      auto_backoff: !!t.auto_backoff,
     })),
   );
 
@@ -282,13 +329,44 @@ async function runTask(
     error,
   });
 
-  const nextRun = computeNextRun(task);
+  // Determine if this was a "silent run" for auto-backoff purposes:
+  // No send_message called AND no visible (non-internal) output
+  const sendMessageCalled = fs.existsSync(sendMessageFlagPath);
+  let visibleOutput = false;
+  if (result) {
+    const raw = typeof result === 'string' ? result : JSON.stringify(result);
+    const stripped = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+    visibleOutput = stripped.length > 0;
+  }
+  const isSilentRun = !error && !sendMessageCalled && !visibleOutput;
+
+  // Update consecutive_silent_runs counter for auto-backoff
+  let newSilentRuns: number | undefined;
+  if (task.auto_backoff && task.schedule_type !== 'once') {
+    if (isSilentRun) {
+      newSilentRuns = (task.consecutive_silent_runs || 0) + 1;
+      logger.info(
+        { taskId: task.id, consecutiveSilentRuns: newSilentRuns },
+        'Silent run detected, incrementing backoff counter',
+      );
+    } else {
+      newSilentRuns = 0;
+    }
+  }
+
+  // Update the task's silent run count before computing next run,
+  // so backoff is applied based on the new count
+  const taskForNextRun =
+    newSilentRuns !== undefined
+      ? { ...task, consecutive_silent_runs: newSilentRuns }
+      : task;
+  const nextRun = computeNextRun(taskForNextRun);
   const resultSummary = error
     ? `Error: ${error}`
     : result
       ? result.slice(0, 200)
       : 'Completed';
-  updateTaskAfterRun(task.id, nextRun, resultSummary);
+  updateTaskAfterRun(task.id, nextRun, resultSummary, newSilentRuns);
 }
 
 let schedulerRunning = false;

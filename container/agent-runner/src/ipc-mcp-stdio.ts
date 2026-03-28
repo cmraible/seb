@@ -119,6 +119,12 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
       .describe(
         'group=runs with chat history and memory, isolated=fresh session (include context in prompt)',
       ),
+    auto_backoff: z
+      .boolean()
+      .default(false)
+      .describe(
+        'Enable auto-backoff for silent runs. When the task completes without sending any messages, the interval between runs doubles (up to 16x). Resets when the task produces output. Useful for monitoring/polling tasks.',
+      ),
     target_group_jid: z
       .string()
       .optional()
@@ -197,6 +203,7 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
       schedule_type: args.schedule_type,
       schedule_value: args.schedule_value,
       context_mode: args.context_mode || 'group',
+      auto_backoff: args.auto_backoff || false,
       targetJid,
       createdBy: groupFolder,
       timestamp: new Date().toISOString(),

@@ -778,6 +778,8 @@ export function writeTasksSnapshot(
     schedule_value: string;
     status: string;
     next_run: string | null;
+    consecutive_silent_runs?: number;
+    auto_backoff?: boolean;
   }>,
 ): void {
   // Write filtered tasks to the group's IPC directory
