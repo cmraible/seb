@@ -62,29 +62,25 @@ export async function startGitHubMcpProxy(
   await client.connect(clientTransport);
   logger.info('Connected to GitHub MCP server via stdio');
 
-  // 2. Create a proxy MCP server that forwards tool requests to the client
-  const proxyServer = new Server(
-    { name: 'github-proxy', version: '1.0.0' },
-    { capabilities: { tools: {} } },
-  );
+  // 2. Helper: create a fresh per-request proxy server wired to the shared client.
+  // Stateless StreamableHTTPServerTransport requires a new transport (and server)
+  // per HTTP request — it throws if handleRequest is called twice on the same instance.
+  function createPerRequestServer(): Server {
+    const server = new Server(
+      { name: 'github-proxy', version: '1.0.0' },
+      { capabilities: { tools: {} } },
+    );
+    server.setRequestHandler(ListToolsRequestSchema, async () => {
+      return client.listTools();
+    });
+    server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      return client.callTool(request.params);
+    });
+    return server;
+  }
 
-  proxyServer.setRequestHandler(ListToolsRequestSchema, async () => {
-    return client.listTools();
-  });
-
-  proxyServer.setRequestHandler(CallToolRequestSchema, async (request) => {
-    return client.callTool(request.params);
-  });
-
-  // 3. Create HTTP transport in stateless mode (no session management needed)
-  const httpTransport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-  });
-  await proxyServer.connect(httpTransport);
-
-  // 4. Create HTTP server to serve MCP requests
+  // 3. Create HTTP server — each request gets its own transport + server
   const httpServer = http.createServer((req, res) => {
-    // Handle CORS
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, GET, DELETE, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', '*');
@@ -98,27 +94,27 @@ export async function startGitHubMcpProxy(
     if (req.method === 'POST') {
       const chunks: Buffer[] = [];
       req.on('data', (c) => chunks.push(c));
-      req.on('end', () => {
+      req.on('end', async () => {
+        let body: unknown;
         try {
-          const body = JSON.parse(Buffer.concat(chunks).toString());
-          httpTransport.handleRequest(req, res, body);
+          body = JSON.parse(Buffer.concat(chunks).toString());
         } catch {
           res.writeHead(400);
           res.end('Invalid JSON');
+          return;
         }
+
+        const server = createPerRequestServer();
+        const transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: undefined,
+        });
+        await server.connect(transport);
+        await transport.handleRequest(req, res, body);
+        res.on('close', () => {
+          transport.close();
+          server.close();
+        });
       });
-      return;
-    }
-
-    // GET for SSE (required by MCP Streamable HTTP transport spec)
-    if (req.method === 'GET') {
-      httpTransport.handleRequest(req, res);
-      return;
-    }
-
-    // DELETE for session termination
-    if (req.method === 'DELETE') {
-      httpTransport.handleRequest(req, res);
       return;
     }
 
