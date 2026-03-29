@@ -8,6 +8,7 @@
  * connect to it via HTTP (Streamable HTTP MCP transport).
  */
 import http from 'http';
+import path from 'path';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -36,10 +37,21 @@ export async function startGitHubMcpProxy(
   }
 
   // 1. Connect to the GitHub MCP server via stdio
+  // Ensure nvm bin dir is on PATH so npx and its child node processes resolve
+  const nodeBinDir = path.dirname(process.execPath);
+  const currentPath = process.env.PATH ?? '';
+  const patchedPath = currentPath.includes(nodeBinDir)
+    ? currentPath
+    : `${nodeBinDir}:${currentPath}`;
+
   const clientTransport = new StdioClientTransport({
-    command: 'npx',
+    command: path.join(nodeBinDir, 'npx'),
     args: ['-y', '@modelcontextprotocol/server-github'],
-    env: { ...process.env, GITHUB_PERSONAL_ACCESS_TOKEN: GITHUB_TOKEN },
+    env: {
+      ...process.env,
+      PATH: patchedPath,
+      GITHUB_PERSONAL_ACCESS_TOKEN: GITHUB_TOKEN,
+    },
   });
 
   const client = new Client({
