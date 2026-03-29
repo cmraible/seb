@@ -567,7 +567,6 @@ async function runQuery(
         'Skill',
         'NotebookEdit',
         'mcp__nanoclaw__*',
-        'mcp__1password__*',
         ...(process.env.LINEAR_ACCESS_TOKEN ? ['mcp__linear__*'] : []),
         ...(process.env.GITHUB_MCP_URL ? ['mcp__github__*'] : []),
         ...(containerInput.isMain ? ['mcp__gmail__*'] : []),
@@ -585,10 +584,6 @@ async function runQuery(
             NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
           },
-        },
-        '1password': {
-          command: 'npx',
-          args: ['-y', '@takescake/1password-mcp'],
         },
         ...(process.env.LINEAR_ACCESS_TOKEN
           ? {
