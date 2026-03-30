@@ -17,7 +17,11 @@
 import fs from 'fs';
 import path from 'path';
 import { execFile } from 'child_process';
-import { query, HookCallback, PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
+import {
+  query,
+  HookCallback,
+  PreCompactHookInput,
+} from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
 
 interface ContainerInput {
@@ -146,7 +150,11 @@ function writeActivity(
  */
 const ACTIVITY_MIN_INTERVAL_MS = 3000; // ~5-10s granularity target
 let lastActivityTime = 0;
-let pendingActivity: { type: 'thought' | 'action'; content: string; action?: string } | null = null;
+let pendingActivity: {
+  type: 'thought' | 'action';
+  content: string;
+  action?: string;
+} | null = null;
 let pendingActivityTimer: ReturnType<typeof setTimeout> | null = null;
 
 function emitActivity(
@@ -173,7 +181,11 @@ function emitActivity(
       pendingActivityTimer = setTimeout(() => {
         if (pendingActivity) {
           lastActivityTime = Date.now();
-          writeActivity(pendingActivity.type, pendingActivity.content, pendingActivity.action);
+          writeActivity(
+            pendingActivity.type,
+            pendingActivity.content,
+            pendingActivity.action,
+          );
           pendingActivity = null;
         }
         pendingActivityTimer = null;
@@ -185,7 +197,10 @@ function emitActivity(
 /**
  * Map a tool name + input to a concise human-readable action description.
  */
-function summarizeToolUse(toolName: string, input: Record<string, unknown>): string {
+function summarizeToolUse(
+  toolName: string,
+  input: Record<string, unknown>,
+): string {
   switch (toolName) {
     case 'Read':
       return `${input.file_path || 'file'}`;
@@ -568,7 +583,7 @@ async function runQuery(
         'NotebookEdit',
         'mcp__nanoclaw__*',
         'mcp__1password__*',
-        ...(process.env.LINEAR_ACCESS_TOKEN ? ['mcp__linear__*'] : []),
+        ...(process.env.LINEAR_MCP_URL ? ['mcp__linear__*'] : []),
         ...(process.env.GITHUB_MCP_URL ? ['mcp__github__*'] : []),
         ...(containerInput.isMain ? ['mcp__gmail__*'] : []),
       ],
@@ -590,14 +605,11 @@ async function runQuery(
           command: 'npx',
           args: ['-y', '@takescake/1password-mcp'],
         },
-        ...(process.env.LINEAR_ACCESS_TOKEN
+        ...(process.env.LINEAR_MCP_URL
           ? {
               linear: {
                 type: 'http' as const,
-                url: 'https://mcp.linear.app/mcp',
-                headers: {
-                  Authorization: `Bearer ${process.env.LINEAR_ACCESS_TOKEN}`,
-                },
+                url: process.env.LINEAR_MCP_URL,
               },
             }
           : {}),
@@ -655,11 +667,14 @@ async function runQuery(
             emitActivity('action', summary, block.name);
           } else if (block.type === 'thinking' && block.thinking) {
             // Emit a concise summary of thinking (first meaningful line, max 200 chars)
-            const lines = block.thinking.split('\n').filter((l: string) => l.trim());
+            const lines = block.thinking
+              .split('\n')
+              .filter((l: string) => l.trim());
             const firstLine = lines[0] || '';
-            const summary = firstLine.length > 200
-              ? firstLine.slice(0, 200) + '...'
-              : firstLine;
+            const summary =
+              firstLine.length > 200
+                ? firstLine.slice(0, 200) + '...'
+                : firstLine;
             if (summary) {
               emitActivity('thought', summary);
             }
@@ -729,40 +744,47 @@ async function runScript(script: string): Promise<ScriptResult | null> {
   fs.writeFileSync(scriptPath, script, { mode: 0o755 });
 
   return new Promise((resolve) => {
-    execFile('bash', [scriptPath], {
-      timeout: SCRIPT_TIMEOUT_MS,
-      maxBuffer: 1024 * 1024,
-      env: process.env,
-    }, (error, stdout, stderr) => {
-      if (stderr) {
-        log(`Script stderr: ${stderr.slice(0, 500)}`);
-      }
+    execFile(
+      'bash',
+      [scriptPath],
+      {
+        timeout: SCRIPT_TIMEOUT_MS,
+        maxBuffer: 1024 * 1024,
+        env: process.env,
+      },
+      (error, stdout, stderr) => {
+        if (stderr) {
+          log(`Script stderr: ${stderr.slice(0, 500)}`);
+        }
 
-      if (error) {
-        log(`Script error: ${error.message}`);
-        return resolve(null);
-      }
-
-      // Parse last non-empty line of stdout as JSON
-      const lines = stdout.trim().split('\n');
-      const lastLine = lines[lines.length - 1];
-      if (!lastLine) {
-        log('Script produced no output');
-        return resolve(null);
-      }
-
-      try {
-        const result = JSON.parse(lastLine);
-        if (typeof result.wakeAgent !== 'boolean') {
-          log(`Script output missing wakeAgent boolean: ${lastLine.slice(0, 200)}`);
+        if (error) {
+          log(`Script error: ${error.message}`);
           return resolve(null);
         }
-        resolve(result as ScriptResult);
-      } catch {
-        log(`Script output is not valid JSON: ${lastLine.slice(0, 200)}`);
-        resolve(null);
-      }
-    });
+
+        // Parse last non-empty line of stdout as JSON
+        const lines = stdout.trim().split('\n');
+        const lastLine = lines[lines.length - 1];
+        if (!lastLine) {
+          log('Script produced no output');
+          return resolve(null);
+        }
+
+        try {
+          const result = JSON.parse(lastLine);
+          if (typeof result.wakeAgent !== 'boolean') {
+            log(
+              `Script output missing wakeAgent boolean: ${lastLine.slice(0, 200)}`,
+            );
+            return resolve(null);
+          }
+          resolve(result as ScriptResult);
+        } catch {
+          log(`Script output is not valid JSON: ${lastLine.slice(0, 200)}`);
+          resolve(null);
+        }
+      },
+    );
   });
 }
 
@@ -848,7 +870,9 @@ async function main(): Promise<void> {
     const scriptResult = await runScript(containerInput.script);
 
     if (!scriptResult || !scriptResult.wakeAgent) {
-      const reason = scriptResult ? 'wakeAgent=false' : 'script error/no output';
+      const reason = scriptResult
+        ? 'wakeAgent=false'
+        : 'script error/no output';
       log(`Script decided not to wake agent: ${reason}`);
       writeOutput({
         status: 'success',

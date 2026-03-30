@@ -13,6 +13,7 @@ import {
   CONTAINER_TIMEOUT,
   DATA_DIR,
   GITHUB_MCP_PORT,
+  LINEAR_MCP_PORT,
   GROUPS_DIR,
   IDLE_TIMEOUT,
   CREDENTIAL_PROXY_PORT,
@@ -325,11 +326,9 @@ async function buildContainerArgs(
   // Pass non-Anthropic secrets that tools inside the container need.
   // GITHUB_TOKEN is NOT passed — containers access GitHub via the host-side
   // GitHub MCP proxy (see github-mcp-proxy.ts) so the token never enters containers.
-  const toolSecrets = readEnvFile([
-    'OP_SERVICE_ACCOUNT_TOKEN',
-    'LINEAR_CLIENT_ID',
-    'LINEAR_CLIENT_SECRET',
-  ]);
+  // LINEAR_ACCESS_TOKEN/CLIENT_ID/CLIENT_SECRET are NOT passed — containers access
+  // Linear via the host-side Linear MCP proxy (see linear-mcp-proxy.ts).
+  const toolSecrets = readEnvFile(['OP_SERVICE_ACCOUNT_TOKEN']);
   for (const [key, value] of Object.entries(toolSecrets)) {
     if (value) args.push('-e', `${key}=${value}`);
   }
@@ -343,18 +342,25 @@ async function buildContainerArgs(
     );
   }
 
-  // Read persisted Linear OAuth token if available
-  const linearOAuthFile = path.join(DATA_DIR, 'linear-oauth.json');
-  try {
-    if (fs.existsSync(linearOAuthFile)) {
-      const raw = fs.readFileSync(linearOAuthFile, 'utf-8');
-      const data = JSON.parse(raw);
-      if (data.access_token) {
-        args.push('-e', `LINEAR_ACCESS_TOKEN=${data.access_token}`);
+  // Tell the container where the Linear MCP proxy lives
+  // (LINEAR_ACCESS_TOKEN is never passed to containers)
+  {
+    let hasLinearToken = false;
+    const linearOAuthFile = path.join(DATA_DIR, 'linear-oauth.json');
+    try {
+      if (fs.existsSync(linearOAuthFile)) {
+        const data = JSON.parse(fs.readFileSync(linearOAuthFile, 'utf-8'));
+        hasLinearToken = !!data.access_token;
       }
+    } catch {
+      // Ignore
     }
-  } catch {
-    // Ignore — Linear MCP will simply be unavailable
+    if (hasLinearToken) {
+      args.push(
+        '-e',
+        `LINEAR_MCP_URL=http://${CONTAINER_HOST_GATEWAY}:${LINEAR_MCP_PORT}`,
+      );
+    }
   }
 
   // Run as host user so bind-mounted files are accessible.
