@@ -107,6 +107,9 @@ export const TIMEZONE = resolveConfigTimezone();
 // GitHub MCP proxy port (containers connect here for GitHub API access)
 export const GITHUB_MCP_PORT = parseIntEnv('GITHUB_MCP_PORT', 3003);
 
+// Linear MCP proxy port (containers connect here for Linear API access)
+export const LINEAR_MCP_PORT = parseIntEnv('LINEAR_MCP_PORT', 3004);
+
 // Telegram configuration
 // Web App configuration
 export const WEBAPP_PORT = parseIntEnv('WEBAPP_PORT', 3002);

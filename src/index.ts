@@ -25,6 +25,7 @@ import {
   IDLE_TIMEOUT,
   CREDENTIAL_PROXY_PORT,
   GITHUB_MCP_PORT,
+  LINEAR_MCP_PORT,
   POLL_INTERVAL,
   TELEGRAM_BOT_POOL,
   TIMEZONE,
@@ -49,6 +50,7 @@ import {
 } from './container-runtime.js';
 import { startCredentialProxy } from './credential-proxy.js';
 import { startGitHubMcpProxy } from './github-mcp-proxy.js';
+import { startLinearMcpProxy } from './linear-mcp-proxy.js';
 import {
   deleteTask,
   getAllChats,
@@ -662,6 +664,27 @@ async function main(): Promise<void> {
     PROXY_BIND_HOST,
   );
 
+  // Start Linear MCP proxy (containers access Linear tools through this,
+  // so the LINEAR_ACCESS_TOKEN never enters any container)
+  let linearAccessToken = '';
+  try {
+    const linearOAuthFile = path.join(
+      (await import('./config.js')).DATA_DIR,
+      'linear-oauth.json',
+    );
+    if (fs.existsSync(linearOAuthFile)) {
+      const data = JSON.parse(fs.readFileSync(linearOAuthFile, 'utf-8'));
+      if (data.access_token) linearAccessToken = data.access_token;
+    }
+  } catch {
+    // Linear OAuth not configured
+  }
+  const linearMcpServer = await startLinearMcpProxy(
+    LINEAR_MCP_PORT,
+    PROXY_BIND_HOST,
+    linearAccessToken,
+  );
+
   // Declared here so the shutdown handler closure can see it;
   // assigned after channels are connected and the webhook server starts.
   let webhookServer: http.Server | null = null;
@@ -672,6 +695,7 @@ async function main(): Promise<void> {
     logger.info({ signal }, 'Shutdown signal received');
     proxyServer.close();
     githubMcpServer?.close();
+    linearMcpServer?.close();
     webAppServer?.close();
     if (webhookServer) webhookServer.close();
     await queue.shutdown(10000);
