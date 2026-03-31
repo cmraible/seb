@@ -91,19 +91,6 @@ You have access to Gmail (seb@chrisraible.com) via MCP tools:
 - `mcp__gmail__draft_email` - Create a draft
 - `mcp__gmail__list_labels` - List available labels
 
-## 1Password
-
-You have access to a 1Password vault ("Seb") via MCP tools for secure secret storage:
-- `mcp__1password__vault_list` - List accessible vaults
-- `mcp__1password__item_lookup` - Search items by title
-- `mcp__1password__password_create` - Create new login items
-- `mcp__1password__password_read` - Retrieve passwords via references
-- `mcp__1password__password_update` - Rotate existing passwords
-- `mcp__1password__password_generate` - Create secure random passwords
-- `mcp__1password__item_delete` - Remove items from vaults
-
-Use 1Password to store any secrets you need (API keys, account passwords, tokens) rather than saving them in plaintext files.
-
 ## GitHub
 
 You have a GitHub account: **seb-writes-code** (seb@chrisraible.com).
