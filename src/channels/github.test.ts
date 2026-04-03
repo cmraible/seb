@@ -1540,3 +1540,180 @@ describe('GitHubChannel ack', () => {
     await noTokenChannel.disconnect();
   });
 });
+
+describe('review request auto-launch', () => {
+  const SECRET = 'test-webhook-secret';
+  let channel: GitHubChannel;
+  let server: http.Server;
+  let port: number;
+  let opts: ChannelOpts;
+
+  afterEach(async () => {
+    await channel?.disconnect();
+    server?.close();
+  });
+
+  it('calls requestProcessing when review is requested from bot', async () => {
+    const requestProcessing = vi.fn();
+    opts = createTestOpts({ requestProcessing });
+    channel = new GitHubChannel(
+      SECRET,
+      'test-token',
+      [],
+      opts,
+      'seb-writes-code',
+    );
+    await channel.connect();
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
+
+    await sendWebhook(port, {
+      event: 'pull_request',
+      secret: SECRET,
+      payload: {
+        action: 'review_requested',
+        repository: { full_name: 'cmraible/seb' },
+        pull_request: {
+          number: 10,
+          title: 'Add feature',
+          html_url: 'https://github.com/cmraible/seb/pull/10',
+          merged: false,
+          user: { login: 'cmraible' },
+        },
+        requested_reviewer: { login: 'seb-writes-code' },
+        sender: { login: 'cmraible' },
+      },
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(requestProcessing).toHaveBeenCalledWith('gh:cmraible/seb#10');
+  });
+
+  it('enhances message with review instructions when bot is the reviewer', async () => {
+    const requestProcessing = vi.fn();
+    opts = createTestOpts({ requestProcessing });
+    channel = new GitHubChannel(
+      SECRET,
+      'test-token',
+      [],
+      opts,
+      'seb-writes-code',
+    );
+    await channel.connect();
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
+
+    await sendWebhook(port, {
+      event: 'pull_request',
+      secret: SECRET,
+      payload: {
+        action: 'review_requested',
+        repository: { full_name: 'cmraible/seb' },
+        pull_request: {
+          number: 10,
+          title: 'Add feature',
+          html_url: 'https://github.com/cmraible/seb/pull/10',
+          merged: false,
+          user: { login: 'cmraible' },
+        },
+        requested_reviewer: { login: 'seb-writes-code' },
+        sender: { login: 'cmraible' },
+      },
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(opts.onMessage).toHaveBeenCalledWith(
+      'gh:cmraible/seb#10',
+      expect.objectContaining({
+        content: expect.stringContaining(
+          'You have been requested to review PR #10',
+        ),
+      }),
+    );
+    expect(opts.onMessage).toHaveBeenCalledWith(
+      'gh:cmraible/seb#10',
+      expect.objectContaining({
+        content: expect.stringContaining('create_pull_request_review'),
+      }),
+    );
+  });
+
+  it('does NOT call requestProcessing when review is requested from someone else', async () => {
+    const requestProcessing = vi.fn();
+    opts = createTestOpts({ requestProcessing });
+    channel = new GitHubChannel(
+      SECRET,
+      'test-token',
+      [],
+      opts,
+      'seb-writes-code',
+    );
+    await channel.connect();
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
+
+    await sendWebhook(port, {
+      event: 'pull_request',
+      secret: SECRET,
+      payload: {
+        action: 'review_requested',
+        repository: { full_name: 'cmraible/seb' },
+        pull_request: {
+          number: 10,
+          title: 'Add feature',
+          html_url: 'https://github.com/cmraible/seb/pull/10',
+          merged: false,
+          user: { login: 'cmraible' },
+        },
+        requested_reviewer: { login: 'other-reviewer' },
+        sender: { login: 'cmraible' },
+      },
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(requestProcessing).not.toHaveBeenCalled();
+  });
+
+  it('does NOT call requestProcessing when botUsername is not set', async () => {
+    const requestProcessing = vi.fn();
+    opts = createTestOpts({ requestProcessing });
+    channel = new GitHubChannel(SECRET, 'test-token', [], opts);
+    await channel.connect();
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
+
+    await sendWebhook(port, {
+      event: 'pull_request',
+      secret: SECRET,
+      payload: {
+        action: 'review_requested',
+        repository: { full_name: 'cmraible/seb' },
+        pull_request: {
+          number: 10,
+          title: 'Add feature',
+          html_url: 'https://github.com/cmraible/seb/pull/10',
+          merged: false,
+          user: { login: 'cmraible' },
+        },
+        requested_reviewer: { login: 'seb-writes-code' },
+        sender: { login: 'cmraible' },
+      },
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(requestProcessing).not.toHaveBeenCalled();
+    // Should still use the default message format
+    expect(opts.onMessage).toHaveBeenCalledWith(
+      'gh:cmraible/seb#10',
+      expect.objectContaining({
+        content: expect.stringContaining(
+          'Review requested from seb-writes-code on PR #10',
+        ),
+      }),
+    );
+  });
+});

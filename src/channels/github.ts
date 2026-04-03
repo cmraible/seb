@@ -463,6 +463,28 @@ export class GitHubChannel implements Channel {
     const formatted = formatEvent(event, payload);
     if (!formatted) return;
 
+    // If a review was requested from the bot, enhance the message with review
+    // instructions and immediately spin up a container to handle it.
+    const isBotReviewRequest =
+      event === 'pull_request' &&
+      payload.action === 'review_requested' &&
+      !!this.botUsername &&
+      payload.requested_reviewer?.login === this.botUsername;
+
+    if (isBotReviewRequest) {
+      const pr = payload.pull_request;
+      const author = pr?.user?.login || 'unknown';
+      formatted.text =
+        `[GitHub] You have been requested to review PR #${pr.number} "${pr.title}" by ${author} in ${repo}\n` +
+        `${pr.html_url}\n\n` +
+        `Please review this PR thoroughly:\n` +
+        `1. Fetch the PR diff using GitHub MCP tools (get_pull_request_files)\n` +
+        `2. Check for bugs, security issues, style problems, and missing tests\n` +
+        `3. Check CI status (get_pull_request_status) and note if checks are still pending\n` +
+        `4. Post your review using create_pull_request_review with inline comments on specific lines where issues are found\n` +
+        `5. Use APPROVE for clean PRs, REQUEST_CHANGES for real issues, COMMENT for minor suggestions`;
+    }
+
     // Deliver message
     this.opts.onMessage(chatJid, {
       id: deliveryId || crypto.randomUUID(),
@@ -474,6 +496,15 @@ export class GitHubChannel implements Channel {
       is_from_me: false,
       metadata: formatted.metadata,
     });
+
+    // Auto-launch container for review requests targeting the bot
+    if (isBotReviewRequest && this.opts.requestProcessing) {
+      logger.info(
+        { chatJid, repo, prNumber: payload.pull_request?.number },
+        'Auto-launching container for bot review request',
+      );
+      this.opts.requestProcessing(chatJid);
+    }
 
     logger.info(
       { event, repo, chatJid, deliveryId },
