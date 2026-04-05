@@ -19,7 +19,13 @@ vi.mock('../logger.js', () => ({
   },
 }));
 
-import { GitHubChannel, makeGitHubFolder, extractAuthor } from './github.js';
+import {
+  GitHubChannel,
+  makeGitHubFolder,
+  extractAuthor,
+  extractFeatureSlug,
+  parseSupersedes,
+} from './github.js';
 import { ChannelOpts } from './registry.js';
 
 // --- Test helpers ---
@@ -1510,5 +1516,560 @@ describe('GitHubChannel ack', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
     fetchSpy.mockRestore();
     await noTokenChannel.disconnect();
+  });
+});
+
+// --- extractFeatureSlug ---
+
+describe('extractFeatureSlug', () => {
+  it('extracts slug from feat/ prefix', () => {
+    expect(extractFeatureSlug('feat/review-requested')).toBe(
+      'review-requested',
+    );
+  });
+
+  it('extracts first two segments from longer branch names', () => {
+    expect(extractFeatureSlug('feat/review-requested-routing')).toBe(
+      'review-requested',
+    );
+  });
+
+  it('works with fix/ prefix', () => {
+    expect(extractFeatureSlug('fix/auth-bug')).toBe('auth-bug');
+  });
+
+  it('works with feature/ prefix', () => {
+    expect(extractFeatureSlug('feature/pr-reviewer')).toBe('pr-reviewer');
+  });
+
+  it('returns null for branches without recognized prefix', () => {
+    expect(extractFeatureSlug('main')).toBeNull();
+    expect(extractFeatureSlug('develop')).toBeNull();
+    expect(extractFeatureSlug('some-branch')).toBeNull();
+  });
+
+  it('handles single-segment slugs', () => {
+    expect(extractFeatureSlug('feat/auth')).toBe('auth');
+  });
+});
+
+// --- parseSupersedes ---
+
+describe('parseSupersedes', () => {
+  it('parses "Supersedes #NNN" references', () => {
+    expect(parseSupersedes('Supersedes #123')).toEqual([123]);
+  });
+
+  it('parses "Replaces #NNN" references', () => {
+    expect(parseSupersedes('Replaces #456')).toEqual([456]);
+  });
+
+  it('parses multiple references', () => {
+    expect(parseSupersedes('Supersedes #10 and Replaces #20')).toEqual([
+      10, 20,
+    ]);
+  });
+
+  it('is case-insensitive', () => {
+    expect(parseSupersedes('supersedes #99')).toEqual([99]);
+    expect(parseSupersedes('REPLACES #88')).toEqual([88]);
+  });
+
+  it('returns empty array for null/undefined/empty body', () => {
+    expect(parseSupersedes(null)).toEqual([]);
+    expect(parseSupersedes(undefined)).toEqual([]);
+    expect(parseSupersedes('')).toEqual([]);
+  });
+
+  it('returns empty array when no references found', () => {
+    expect(parseSupersedes('This is a normal PR body')).toEqual([]);
+  });
+});
+
+// --- Auto-close superseded PRs ---
+
+describe('Auto-close superseded PRs', () => {
+  const SECRET = 'auto-close-secret';
+  let opts: ChannelOpts;
+  let channel: GitHubChannel;
+  let server: http.Server;
+  let port: number;
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    opts = createTestOpts();
+  });
+
+  afterEach(async () => {
+    if (server) server.close();
+    if (channel) await channel.disconnect();
+    if (fetchSpy) fetchSpy.mockRestore();
+  });
+
+  it('closes PRs with matching branch prefix from bot author', async () => {
+    channel = new GitHubChannel(
+      SECRET,
+      'test-token',
+      [],
+      opts,
+      'seb-writes-code',
+      true,
+    );
+    await channel.connect();
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
+
+    // Mock fetch for the GitHub API calls (list PRs, comment, close)
+    const originalFetch = global.fetch;
+    const fetchCalls: { url: string; method: string; body?: any }[] = [];
+    fetchSpy = vi
+      .spyOn(global, 'fetch')
+      .mockImplementation(async (input, init) => {
+        const url = typeof input === 'string' ? input : (input as Request).url;
+        const method = init?.method || 'GET';
+        fetchCalls.push({
+          url,
+          method,
+          body: init?.body ? JSON.parse(init.body as string) : undefined,
+        });
+
+        // Webhook request — pass through
+        if (url.includes('/github/webhook')) {
+          return originalFetch(input, init);
+        }
+
+        // List PRs response
+        if (url.includes('/pulls?state=open')) {
+          return new Response(
+            JSON.stringify([
+              {
+                number: 205,
+                user: { login: 'seb-writes-code' },
+                head: { ref: 'feat/review-requested-old' },
+              },
+              {
+                number: 245,
+                user: { login: 'seb-writes-code' },
+                head: { ref: 'feat/review-handler' },
+              },
+              {
+                number: 100,
+                user: { login: 'cmraible' },
+                head: { ref: 'feat/review-requested-manual' },
+              },
+            ]),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+
+        // Comment or close PR
+        return new Response(JSON.stringify({ id: 1 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+
+    await sendWebhook(port, {
+      event: 'pull_request',
+      secret: SECRET,
+      payload: {
+        action: 'opened',
+        repository: { full_name: 'cmraible/seb' },
+        pull_request: {
+          number: 249,
+          title: 'Review requested handling',
+          html_url: 'https://github.com/cmraible/seb/pull/249',
+          user: { login: 'seb-writes-code' },
+          head: { ref: 'feat/review-requested-routing' },
+          body: 'Implements review_requested routing',
+        },
+        sender: { login: 'seb-writes-code' },
+      },
+    });
+
+    // Wait for async processing
+    await new Promise((r) => setTimeout(r, 200));
+
+    // Should have listed PRs
+    expect(fetchCalls.some((c) => c.url.includes('/pulls?state=open'))).toBe(
+      true,
+    );
+
+    // Should have closed PR #205 (feat/review-requested-old → slug "review-requested" matches)
+    const commentCalls = fetchCalls.filter(
+      (c) => c.method === 'POST' && c.url.includes('/issues/205/comments'),
+    );
+    expect(commentCalls.length).toBe(1);
+    expect(commentCalls[0].body.body).toBe(
+      'Superseded by #249 — closing this PR.',
+    );
+
+    const closeCalls = fetchCalls.filter(
+      (c) => c.method === 'PATCH' && c.url.includes('/pulls/205'),
+    );
+    expect(closeCalls.length).toBe(1);
+    expect(closeCalls[0].body.state).toBe('closed');
+
+    // Should NOT have closed PR #100 (from cmraible, not the bot)
+    expect(
+      fetchCalls.some(
+        (c) => c.method === 'PATCH' && c.url.includes('/pulls/100'),
+      ),
+    ).toBe(false);
+  });
+
+  it('closes PRs referenced by "Supersedes #NNN" in body', async () => {
+    channel = new GitHubChannel(
+      SECRET,
+      'test-token',
+      [],
+      opts,
+      'seb-writes-code',
+      true,
+    );
+    await channel.connect();
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
+
+    const originalFetch = global.fetch;
+    const fetchCalls: { url: string; method: string; body?: any }[] = [];
+    fetchSpy = vi
+      .spyOn(global, 'fetch')
+      .mockImplementation(async (input, init) => {
+        const url = typeof input === 'string' ? input : (input as Request).url;
+        const method = init?.method || 'GET';
+        fetchCalls.push({
+          url,
+          method,
+          body: init?.body ? JSON.parse(init.body as string) : undefined,
+        });
+
+        if (url.includes('/github/webhook')) {
+          return originalFetch(input, init);
+        }
+
+        if (url.includes('/pulls?state=open')) {
+          return new Response(
+            JSON.stringify([
+              {
+                number: 50,
+                user: { login: 'seb-writes-code' },
+                head: { ref: 'feat/unrelated-branch' },
+              },
+            ]),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+
+        return new Response(JSON.stringify({ id: 1 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+
+    await sendWebhook(port, {
+      event: 'pull_request',
+      secret: SECRET,
+      payload: {
+        action: 'opened',
+        repository: { full_name: 'cmraible/seb' },
+        pull_request: {
+          number: 51,
+          title: 'New approach',
+          html_url: 'https://github.com/cmraible/seb/pull/51',
+          user: { login: 'seb-writes-code' },
+          head: { ref: 'feat/new-approach' },
+          body: 'Better implementation. Supersedes #50',
+        },
+        sender: { login: 'seb-writes-code' },
+      },
+    });
+
+    await new Promise((r) => setTimeout(r, 200));
+
+    const closeCalls = fetchCalls.filter(
+      (c) => c.method === 'PATCH' && c.url.includes('/pulls/50'),
+    );
+    expect(closeCalls.length).toBe(1);
+  });
+
+  it('does not close PRs from non-bot users', async () => {
+    channel = new GitHubChannel(
+      SECRET,
+      'test-token',
+      [],
+      opts,
+      'seb-writes-code',
+      true,
+    );
+    await channel.connect();
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
+
+    const originalFetch = global.fetch;
+    const fetchCalls: { url: string; method: string }[] = [];
+    fetchSpy = vi
+      .spyOn(global, 'fetch')
+      .mockImplementation(async (input, init) => {
+        const url = typeof input === 'string' ? input : (input as Request).url;
+        fetchCalls.push({ url, method: init?.method || 'GET' });
+
+        if (url.includes('/github/webhook')) {
+          return originalFetch(input, init);
+        }
+
+        return new Response('[]', {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+
+    // PR opened by a human — should NOT trigger auto-close
+    await sendWebhook(port, {
+      event: 'pull_request',
+      secret: SECRET,
+      payload: {
+        action: 'opened',
+        repository: { full_name: 'cmraible/seb' },
+        pull_request: {
+          number: 60,
+          title: 'Human PR',
+          html_url: 'https://github.com/cmraible/seb/pull/60',
+          user: { login: 'cmraible' },
+          head: { ref: 'feat/review-requested' },
+          body: '',
+        },
+        sender: { login: 'cmraible' },
+      },
+    });
+
+    await new Promise((r) => setTimeout(r, 200));
+
+    // Should NOT have listed PRs for auto-close (sender is not the bot)
+    expect(fetchCalls.some((c) => c.url.includes('/pulls?state=open'))).toBe(
+      false,
+    );
+  });
+
+  it('does nothing when no matching PRs are found', async () => {
+    channel = new GitHubChannel(
+      SECRET,
+      'test-token',
+      [],
+      opts,
+      'seb-writes-code',
+      true,
+    );
+    await channel.connect();
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
+
+    const originalFetch = global.fetch;
+    const fetchCalls: { url: string; method: string }[] = [];
+    fetchSpy = vi
+      .spyOn(global, 'fetch')
+      .mockImplementation(async (input, init) => {
+        const url = typeof input === 'string' ? input : (input as Request).url;
+        fetchCalls.push({ url, method: init?.method || 'GET' });
+
+        if (url.includes('/github/webhook')) {
+          return originalFetch(input, init);
+        }
+
+        if (url.includes('/pulls?state=open')) {
+          return new Response(
+            JSON.stringify([
+              {
+                number: 10,
+                user: { login: 'seb-writes-code' },
+                head: { ref: 'feat/totally-different' },
+              },
+            ]),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+
+        return new Response('{}', {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+
+    await sendWebhook(port, {
+      event: 'pull_request',
+      secret: SECRET,
+      payload: {
+        action: 'opened',
+        repository: { full_name: 'cmraible/seb' },
+        pull_request: {
+          number: 20,
+          title: 'New feature',
+          html_url: 'https://github.com/cmraible/seb/pull/20',
+          user: { login: 'seb-writes-code' },
+          head: { ref: 'feat/something-else' },
+          body: '',
+        },
+        sender: { login: 'seb-writes-code' },
+      },
+    });
+
+    await new Promise((r) => setTimeout(r, 200));
+
+    // Listed PRs but didn't close any
+    expect(fetchCalls.some((c) => c.url.includes('/pulls?state=open'))).toBe(
+      true,
+    );
+    expect(fetchCalls.some((c) => c.method === 'PATCH')).toBe(false);
+  });
+
+  it('closes multiple superseded PRs at once', async () => {
+    channel = new GitHubChannel(
+      SECRET,
+      'test-token',
+      [],
+      opts,
+      'seb-writes-code',
+      true,
+    );
+    await channel.connect();
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
+
+    const originalFetch = global.fetch;
+    const fetchCalls: { url: string; method: string; body?: any }[] = [];
+    fetchSpy = vi
+      .spyOn(global, 'fetch')
+      .mockImplementation(async (input, init) => {
+        const url = typeof input === 'string' ? input : (input as Request).url;
+        const method = init?.method || 'GET';
+        fetchCalls.push({
+          url,
+          method,
+          body: init?.body ? JSON.parse(init.body as string) : undefined,
+        });
+
+        if (url.includes('/github/webhook')) {
+          return originalFetch(input, init);
+        }
+
+        if (url.includes('/pulls?state=open')) {
+          return new Response(
+            JSON.stringify([
+              {
+                number: 205,
+                user: { login: 'seb-writes-code' },
+                head: { ref: 'feat/review-requested-old' },
+              },
+              {
+                number: 245,
+                user: { login: 'seb-writes-code' },
+                head: { ref: 'feat/review-requested-v2' },
+              },
+              {
+                number: 248,
+                user: { login: 'seb-writes-code' },
+                head: { ref: 'feat/review-requested-routing' },
+              },
+            ]),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+
+        return new Response(JSON.stringify({ id: 1 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+
+    await sendWebhook(port, {
+      event: 'pull_request',
+      secret: SECRET,
+      payload: {
+        action: 'opened',
+        repository: { full_name: 'cmraible/seb' },
+        pull_request: {
+          number: 249,
+          title: 'Final review implementation',
+          html_url: 'https://github.com/cmraible/seb/pull/249',
+          user: { login: 'seb-writes-code' },
+          head: { ref: 'feat/review-requested-final' },
+          body: '',
+        },
+        sender: { login: 'seb-writes-code' },
+      },
+    });
+
+    await new Promise((r) => setTimeout(r, 200));
+
+    // All three should be closed (all share "review-requested" slug)
+    const patchCalls = fetchCalls.filter((c) => c.method === 'PATCH');
+    expect(patchCalls.length).toBe(3);
+    const closedNumbers = patchCalls
+      .map((c) => c.url.match(/\/pulls\/(\d+)/)?.[1])
+      .sort();
+    expect(closedNumbers).toEqual(['205', '245', '248']);
+  });
+
+  it('does not auto-close when feature is disabled', async () => {
+    channel = new GitHubChannel(
+      SECRET,
+      'test-token',
+      [],
+      opts,
+      'seb-writes-code',
+      false, // disabled
+    );
+    await channel.connect();
+    const result = await startServer(opts.app!);
+    server = result.server;
+    port = result.port;
+
+    const originalFetch = global.fetch;
+    const fetchCalls: { url: string; method: string }[] = [];
+    fetchSpy = vi
+      .spyOn(global, 'fetch')
+      .mockImplementation(async (input, init) => {
+        const url = typeof input === 'string' ? input : (input as Request).url;
+        fetchCalls.push({ url, method: init?.method || 'GET' });
+
+        if (url.includes('/github/webhook')) {
+          return originalFetch(input, init);
+        }
+
+        return new Response('[]', {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      });
+
+    await sendWebhook(port, {
+      event: 'pull_request',
+      secret: SECRET,
+      payload: {
+        action: 'opened',
+        repository: { full_name: 'cmraible/seb' },
+        pull_request: {
+          number: 300,
+          title: 'New PR',
+          html_url: 'https://github.com/cmraible/seb/pull/300',
+          user: { login: 'seb-writes-code' },
+          head: { ref: 'feat/review-new' },
+          body: '',
+        },
+        sender: { login: 'seb-writes-code' },
+      },
+    });
+
+    await new Promise((r) => setTimeout(r, 200));
+
+    // Should NOT have listed PRs at all
+    expect(fetchCalls.some((c) => c.url.includes('/pulls?state=open'))).toBe(
+      false,
+    );
   });
 });

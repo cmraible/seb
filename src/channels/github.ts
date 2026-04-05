@@ -146,6 +146,33 @@ export function extractAuthor(event: string, payload: any): string | null {
   }
 }
 
+/**
+ * Extract the feature slug from a branch name.
+ * Given "feat/review-requested-routing", returns "review-requested".
+ * Given "fix/auth-bug", returns "auth-bug".
+ * Returns null if no recognizable prefix is found.
+ */
+export function extractFeatureSlug(branchName: string): string | null {
+  const match = branchName.match(
+    /^(?:feat|fix|feature|bugfix|hotfix|chore|refactor)\/([\w-]+)/,
+  );
+  if (!match) return null;
+  // Take the first two hyphen-separated segments as the feature slug
+  const parts = match[1].split('-');
+  if (parts.length <= 2) return match[1];
+  return parts.slice(0, 2).join('-');
+}
+
+/**
+ * Parse "Supersedes #NNN" or "Replaces #NNN" references from PR body text.
+ * Returns an array of PR numbers explicitly referenced.
+ */
+export function parseSupersedes(body: string | null | undefined): number[] {
+  if (!body) return [];
+  const matches = body.matchAll(/(?:supersedes|replaces)\s+#(\d+)/gi);
+  return [...matches].map((m) => parseInt(m[1], 10));
+}
+
 interface FormattedEvent {
   text: string;
   metadata?: Record<string, string>;
@@ -270,6 +297,8 @@ export class GitHubChannel implements Channel {
   private allowedSenders: Set<string> | null;
   /** GitHub username of the bot — PRs opened by this user skip the trigger */
   private botUsername: string;
+  /** When true, auto-close older PRs from the bot that are superseded by a new one */
+  private autoCloseSuperseded: boolean;
 
   constructor(
     webhookSecret: string,
@@ -277,6 +306,7 @@ export class GitHubChannel implements Channel {
     allowedSenders: string[],
     opts: ChannelOpts,
     botUsername: string = '',
+    autoCloseSuperseded: boolean = true,
   ) {
     this.webhookSecret = webhookSecret;
     this.token = token;
@@ -284,6 +314,7 @@ export class GitHubChannel implements Channel {
       allowedSenders.length > 0 ? new Set(allowedSenders) : null;
     this.opts = opts;
     this.botUsername = botUsername;
+    this.autoCloseSuperseded = autoCloseSuperseded;
   }
 
   async connect(): Promise<void> {
@@ -473,6 +504,24 @@ export class GitHubChannel implements Channel {
       { event, repo, chatJid, deliveryId },
       'GitHub webhook event processed',
     );
+
+    // Auto-close superseded PRs when the bot opens a new PR
+    if (
+      this.autoCloseSuperseded &&
+      event === 'pull_request' &&
+      payload.action === 'opened' &&
+      this.botUsername &&
+      senderName === this.botUsername
+    ) {
+      const pr = payload.pull_request;
+      this.closeSupersededPRs(repo, pr.number, pr.head.ref, pr.body).catch(
+        (err) =>
+          logger.error(
+            { err, repo, prNumber: pr.number },
+            'Error in auto-close superseded PRs',
+          ),
+      );
+    }
   }
 
   /**
@@ -505,6 +554,124 @@ export class GitHubChannel implements Channel {
     } catch (err) {
       logger.warn({ err, repo, headSha }, 'Failed to look up PR by head SHA');
       return null;
+    }
+  }
+
+  /**
+   * Close older open PRs from the bot that are superseded by a new PR.
+   * A PR is superseded if:
+   * 1. Its branch shares a feature slug prefix with the new PR's branch, OR
+   * 2. The new PR body explicitly references it via "Supersedes #NNN" / "Replaces #NNN"
+   */
+  private async closeSupersededPRs(
+    repo: string,
+    newPrNumber: number,
+    newBranchName: string,
+    newBody: string | null | undefined,
+  ): Promise<void> {
+    if (!this.token || !this.botUsername) return;
+
+    try {
+      // List open PRs from the bot
+      const url = `https://api.github.com/repos/${repo}/pulls?state=open&per_page=100`;
+      const res = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          Accept: 'application/vnd.github+json',
+        },
+      });
+      if (!res.ok) {
+        logger.warn(
+          { repo, status: res.status },
+          'Failed to list PRs for superseded check',
+        );
+        return;
+      }
+
+      const pulls = (await res.json()) as any[];
+      const botPulls = pulls.filter(
+        (pr: any) =>
+          pr.user?.login === this.botUsername && pr.number !== newPrNumber,
+      );
+
+      if (botPulls.length === 0) return;
+
+      // Determine which PRs to close
+      const newSlug = extractFeatureSlug(newBranchName);
+      const explicitSupersedes = new Set(parseSupersedes(newBody));
+      const toClose: any[] = [];
+
+      for (const pr of botPulls) {
+        // Explicit "Supersedes #NNN" reference
+        if (explicitSupersedes.has(pr.number)) {
+          toClose.push(pr);
+          continue;
+        }
+
+        // Branch prefix matching
+        if (newSlug) {
+          const prSlug = extractFeatureSlug(pr.head.ref);
+          if (prSlug && prSlug === newSlug) {
+            toClose.push(pr);
+          }
+        }
+      }
+
+      // Close matched PRs
+      for (const pr of toClose) {
+        try {
+          // Post comment
+          await fetch(
+            `https://api.github.com/repos/${repo}/issues/${pr.number}/comments`,
+            {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${this.token}`,
+                Accept: 'application/vnd.github+json',
+              },
+              body: JSON.stringify({
+                body: `Superseded by #${newPrNumber} — closing this PR.`,
+              }),
+            },
+          );
+
+          // Close the PR
+          await fetch(
+            `https://api.github.com/repos/${repo}/pulls/${pr.number}`,
+            {
+              method: 'PATCH',
+              headers: {
+                Authorization: `Bearer ${this.token}`,
+                Accept: 'application/vnd.github+json',
+              },
+              body: JSON.stringify({ state: 'closed' }),
+            },
+          );
+
+          logger.info(
+            { repo, closedPr: pr.number, newPr: newPrNumber },
+            'Closed superseded PR',
+          );
+        } catch (err) {
+          logger.warn(
+            { err, repo, prNumber: pr.number },
+            'Failed to close superseded PR',
+          );
+        }
+      }
+
+      if (toClose.length > 0) {
+        logger.info(
+          {
+            repo,
+            newPr: newPrNumber,
+            closed: toClose.map((p: any) => p.number),
+          },
+          'Auto-closed superseded PRs',
+        );
+      }
+    } catch (err) {
+      logger.warn({ err, repo }, 'Error checking for superseded PRs');
     }
   }
 
@@ -623,6 +790,7 @@ registerChannel('github', (opts: ChannelOpts) => {
     'GITHUB_TOKEN',
     'GITHUB_ALLOWED_SENDERS',
     'GITHUB_BOT_USERNAME',
+    'GITHUB_AUTO_CLOSE_SUPERSEDED',
   ]);
   const secret =
     process.env.GITHUB_WEBHOOK_SECRET || envVars.GITHUB_WEBHOOK_SECRET || '';
@@ -659,5 +827,18 @@ registerChannel('github', (opts: ChannelOpts) => {
     );
   }
 
-  return new GitHubChannel(secret, token, allowedSenders, opts, botUsername);
+  const autoCloseRaw =
+    process.env.GITHUB_AUTO_CLOSE_SUPERSEDED ||
+    envVars.GITHUB_AUTO_CLOSE_SUPERSEDED ||
+    '';
+  const autoCloseSuperseded = autoCloseRaw.toLowerCase() !== 'false';
+
+  return new GitHubChannel(
+    secret,
+    token,
+    allowedSenders,
+    opts,
+    botUsername,
+    autoCloseSuperseded,
+  );
 });
