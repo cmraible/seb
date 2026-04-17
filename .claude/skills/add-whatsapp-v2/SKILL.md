@@ -17,8 +17,9 @@ Skip to **Credentials** if all of these are already in place:
 
 - `src/channels/whatsapp.ts` exists
 - `src/channels/index.ts` contains `import './whatsapp.js';`
-- `setup/whatsapp-auth.ts` exists and `setup/index.ts`'s `STEPS` map contains `'whatsapp-auth':`
-- `@whiskeysockets/baileys`, `qrcode` are listed in `package.json` dependencies
+- `setup/whatsapp-auth.ts` and `setup/groups.ts` both exist
+- `setup/index.ts`'s `STEPS` map contains both `'whatsapp-auth':` and `groups:`
+- `@whiskeysockets/baileys`, `qrcode`, `pino` are listed in `package.json` dependencies
 
 Otherwise continue. Every step below is safe to re-run.
 
@@ -28,11 +29,12 @@ Otherwise continue. Every step below is safe to re-run.
 git fetch origin channels
 ```
 
-### 2. Copy the adapter and setup step
+### 2. Copy the adapter and setup steps
 
 ```bash
 git show origin/channels:src/channels/whatsapp.ts > src/channels/whatsapp.ts
 git show origin/channels:setup/whatsapp-auth.ts   > setup/whatsapp-auth.ts
+git show origin/channels:setup/groups.ts          > setup/groups.ts
 ```
 
 ### 3. Append the self-registration import
@@ -43,21 +45,20 @@ Append to `src/channels/index.ts` (skip if already present):
 import './whatsapp.js';
 ```
 
-### 4. Register the setup step
+### 4. Register the setup steps
 
-In `setup/index.ts`, add this entry to the `STEPS` map (skip if already present):
+In `setup/index.ts`, add these entries to the `STEPS` map (skip lines already present):
 
 ```typescript
+groups: () => import('./groups.js'),
 'whatsapp-auth': () => import('./whatsapp-auth.js'),
 ```
 
 ### 5. Install the adapter packages (pinned)
 
 ```bash
-pnpm install @whiskeysockets/baileys@6.17.16 qrcode@1.5.4 @types/qrcode@1.5.6
+pnpm install @whiskeysockets/baileys@6.17.16 qrcode@1.5.4 @types/qrcode@1.5.6 pino@9.6.0
 ```
-
-`pino` is already a v2 trunk dependency — no separate install needed.
 
 ### 6. Build
 
