@@ -11,6 +11,7 @@ import path from 'path';
 
 import { log } from '../src/log.js';
 import {
+  commandExists,
   getPlatform,
   getNodePath,
   getServiceManager,
@@ -255,12 +256,34 @@ WantedBy=${runningAsRoot ? 'multi-user.target' : 'default.target'}`;
   fs.writeFileSync(unitPath, unit);
   log.info('Wrote systemd unit', { unitPath });
 
-  // Detect stale docker group before starting (user systemd only)
-  const dockerGroupStale = !runningAsRoot && checkDockerGroupStale();
+  // Detect stale docker group before starting (user systemd only). The user
+  // systemd manager is a long-running process whose group list is frozen at
+  // login, so `usermod -aG docker` mid-session doesn't reach it. Rather than
+  // require the user to log out + back in, punch a POSIX ACL onto the socket
+  // that grants the current user rw directly. This is temporary — the socket
+  // is recreated by dockerd on restart (and by then the user has relogged, so
+  // normal group perms apply again).
+  let dockerGroupStale = !runningAsRoot && checkDockerGroupStale();
   if (dockerGroupStale) {
     log.warn(
       'Docker group not active in systemd session — user was likely added to docker group mid-session',
     );
+    if (commandExists('setfacl')) {
+      const user = execSync('whoami', { encoding: 'utf-8' }).trim();
+      try {
+        execSync(`sudo setfacl -m u:${user}:rw /var/run/docker.sock`, {
+          stdio: 'inherit',
+        });
+        log.info(
+          'Applied temporary ACL to /var/run/docker.sock (resets on docker restart or reboot)',
+        );
+        dockerGroupStale = false;
+      } catch (err) {
+        log.warn('Failed to apply setfacl workaround', { err });
+      }
+    } else {
+      log.warn('setfacl not installed — cannot apply automatic workaround');
+    }
   }
 
   // Kill orphaned nanoclaw processes to avoid channel connection conflicts

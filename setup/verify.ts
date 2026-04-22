@@ -4,7 +4,7 @@
  *
  * Uses better-sqlite3 directly (no sqlite3 CLI), platform-aware service checks.
  */
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -175,12 +175,22 @@ export async function run(_args: string[]): Promise<void> {
     mountAllowlist = 'configured';
   }
 
+  // 7. End-to-end: ping the CLI agent and confirm it replies. Only run if
+  // everything upstream looks healthy, since a broken socket would just hang.
+  let agentPing: 'ok' | 'no_reply' | 'socket_error' | 'skipped' = 'skipped';
+  if (service === 'running' && registeredGroups > 0) {
+    log.info('Pinging CLI agent');
+    agentPing = await pingCliAgent();
+    log.info('Agent ping result', { agentPing });
+  }
+
   // Determine overall status
   const status =
     service === 'running' &&
     credentials !== 'missing' &&
     anyChannelConfigured &&
-    registeredGroups > 0
+    registeredGroups > 0 &&
+    (agentPing === 'ok' || agentPing === 'skipped')
       ? 'success'
       : 'failed';
 
@@ -194,9 +204,55 @@ export async function run(_args: string[]): Promise<void> {
     CHANNEL_AUTH: JSON.stringify(channelAuth),
     REGISTERED_GROUPS: registeredGroups,
     MOUNT_ALLOWLIST: mountAllowlist,
+    AGENT_PING: agentPing,
     STATUS: status,
     LOG: 'logs/setup.log',
   });
 
   if (status === 'failed') process.exit(1);
+}
+
+/**
+ * Send a one-word message through the CLI channel and check for a reply.
+ * Silent by default — stdout/stderr of the child are captured but not
+ * forwarded. Kills the child after 90s so verify can't hang on a wedged
+ * agent (chat.ts's own timeout is 120s, which is too long for setup).
+ */
+function pingCliAgent(): Promise<'ok' | 'no_reply' | 'socket_error'> {
+  return new Promise((resolve) => {
+    const child = spawn('pnpm', ['run', 'chat', 'ping'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill('SIGKILL');
+      resolve('no_reply');
+    }, 90_000);
+
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString('utf-8');
+    });
+    child.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      // chat.ts: exit 0 on reply, 2 on socket error, 3 on no reply.
+      if (code === 2) {
+        resolve('socket_error');
+      } else if (code === 0 && stdout.trim().length > 0) {
+        resolve('ok');
+      } else {
+        resolve('no_reply');
+      }
+    });
+    child.on('error', () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve('socket_error');
+    });
+  });
 }

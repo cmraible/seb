@@ -183,6 +183,8 @@ function createAdapter(): ChannelAdapter {
       text?: unknown;
       to?: unknown;
       reply_to?: unknown;
+      sender?: unknown;
+      senderId?: unknown;
     };
     try {
       payload = JSON.parse(line);
@@ -209,8 +211,8 @@ function createAdapter(): ChannelAdapter {
           timestamp: new Date().toISOString(),
           content: JSON.stringify({
             text: payload.text,
-            sender: 'cli',
-            senderId: `cli:${PLATFORM_ID}`,
+            sender: typeof payload.sender === 'string' ? payload.sender : 'cli',
+            senderId: typeof payload.senderId === 'string' ? payload.senderId : `cli:${PLATFORM_ID}`,
           }),
         },
         replyTo: replyTo ?? undefined,
