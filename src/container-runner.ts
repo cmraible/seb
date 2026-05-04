@@ -21,6 +21,7 @@ import {
 } from './config.js';
 import { readContainerConfig, writeContainerConfig } from './container-config.js';
 import { CONTAINER_RUNTIME_BIN, hostGatewayArgs, readonlyMountArgs, stopContainer } from './container-runtime.js';
+import { getActiveBroker } from './github-app/index.js';
 import { composeGroupClaudeMd } from './claude-md-compose.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { getDb, hasTable } from './db/connection.js';
@@ -448,6 +449,15 @@ async function buildContainerArgs(
     }
   } catch (err) {
     log.warn('OneCLI gateway error — container will have no credentials', { containerName, err });
+  }
+
+  // GitHub App broker — inject URL + shared token if the broker is running.
+  // Container's stdio MCP bridge (mcp-bridges/github-app.ts) reads these to
+  // forward tool calls. The App private key never enters the container.
+  const ghBroker = getActiveBroker();
+  if (ghBroker) {
+    args.push('-e', `GITHUB_APP_BROKER_URL=${ghBroker.url}`);
+    args.push('-e', `GITHUB_APP_BROKER_TOKEN=${ghBroker.token}`);
   }
 
   // Host gateway
