@@ -41,7 +41,10 @@ describe('TokenMinter.getInstallationToken', () => {
     const fakeFetch = (async (url: string, _init?: RequestInit) => {
       calls.push(url);
       return new Response(
-        JSON.stringify({ token: `tok_${calls.length}`, expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString() }),
+        JSON.stringify({
+          token: `tok_${calls.length}`,
+          expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       );
     }) as typeof fetch;
@@ -90,7 +93,10 @@ describe('TokenMinter.getInstallationForRepo', () => {
     const fakeFetch = (async (url: string) => {
       lookups++;
       expect(url).toContain('/repos/foo/bar/installation');
-      return new Response(JSON.stringify({ id: 5150 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ id: 5150 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }) as typeof fetch;
     const m = new TokenMinter('12345', PEM, fakeFetch);
     expect(await m.getInstallationForRepo('foo', 'bar')).toBe(5150);

@@ -60,7 +60,9 @@ async function resolveInstallationToken(
     return minter.getInstallationToken(id);
   }
   if (defaultInstallationId) return minter.getInstallationToken(defaultInstallationId);
-  throw new Error('No installation available — pass installationId, owner+repo, or set GITHUB_APP_DEFAULT_INSTALLATION_ID');
+  throw new Error(
+    'No installation available — pass installationId, owner+repo, or set GITHUB_APP_DEFAULT_INSTALLATION_ID',
+  );
 }
 
 const TOOLS: Record<string, ToolHandler> = {
@@ -94,10 +96,7 @@ const TOOLS: Record<string, ToolHandler> = {
     if (!req.owner || !req.repo) throw new Error('owner and repo required');
     const token = await resolveInstallationToken(minter, def, req);
     const qs = req.state ? `?state=${encodeURIComponent(req.state)}` : '';
-    return callGithub(
-      `${GITHUB_API}/repos/${req.owner}/${req.repo}/pulls${qs}`,
-      minter.installationHeaders(token),
-    );
+    return callGithub(`${GITHUB_API}/repos/${req.owner}/${req.repo}/pulls${qs}`, minter.installationHeaders(token));
   },
 
   get_pull_request: async (minter, def, req) => {
