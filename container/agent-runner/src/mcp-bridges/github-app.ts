@@ -22,6 +22,9 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 
 const BROKER_URL = process.env.GITHUB_APP_BROKER_URL;
 const BROKER_TOKEN = process.env.GITHUB_APP_BROKER_TOKEN;
+const INSTALLATION_ID = process.env.GITHUB_APP_INSTALLATION_ID
+  ? parseInt(process.env.GITHUB_APP_INSTALLATION_ID, 10)
+  : undefined;
 
 interface ToolDef {
   name: string;
@@ -103,16 +106,22 @@ async function callBroker(tool: string, args: Record<string, unknown>): Promise<
   if (!BROKER_URL || !BROKER_TOKEN) {
     throw new Error('GitHub App broker not configured (GITHUB_APP_BROKER_URL/TOKEN missing)');
   }
+  // Stamp the agent group's pinned installation id when the caller didn't
+  // pass one and the call has no owner/repo to resolve from.
+  const reqBody: Record<string, unknown> = { ...args };
+  if (INSTALLATION_ID && reqBody.installationId == null && (reqBody.owner == null || reqBody.repo == null)) {
+    reqBody.installationId = INSTALLATION_ID;
+  }
   const res = await fetch(`${BROKER_URL}/v1/tools/${tool}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${BROKER_TOKEN}` },
-    body: JSON.stringify(args),
+    body: JSON.stringify(reqBody),
   });
   const text = await res.text();
   if (!res.ok) throw new Error(`broker error (${res.status}): ${text}`);
-  const body = JSON.parse(text) as { result?: unknown; error?: string };
-  if (body.error) throw new Error(body.error);
-  return body.result;
+  const resBody = JSON.parse(text) as { result?: unknown; error?: string };
+  if (resBody.error) throw new Error(resBody.error);
+  return resBody.result;
 }
 
 const server = new Server({ name: 'github_app', version: '0.1.0' }, { capabilities: { tools: {} } });

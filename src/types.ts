@@ -6,6 +6,8 @@ export interface AgentGroup {
   folder: string;
   agent_provider: string | null;
   created_at: string;
+  /** Default GitHub App installation id for tools that don't pass owner/repo. */
+  github_installation_id?: number | null;
 }
 
 export type UnknownSenderPolicy = 'strict' | 'request_approval' | 'public';
