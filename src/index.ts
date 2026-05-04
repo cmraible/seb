@@ -12,6 +12,7 @@ import { initDb } from './db/connection.js';
 import { runMigrations } from './db/migrations/index.js';
 import { ensureContainerRuntimeRunning, cleanupOrphans } from './container-runtime.js';
 import { startActiveDeliveryPoll, startSweepDeliveryPoll, setDeliveryAdapter, stopDeliveryPolls } from './delivery.js';
+import { maybeStartGitHubAppBroker, stopGitHubAppBroker } from './github-app/index.js';
 import { startHostSweep, stopHostSweep } from './host-sweep.js';
 import { routeInbound } from './router.js';
 import { log } from './log.js';
@@ -159,6 +160,9 @@ async function main(): Promise<void> {
   startHostSweep();
   log.info('Host sweep started');
 
+  // 7. GitHub App broker (no-op unless GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY_PATH set)
+  await maybeStartGitHubAppBroker();
+
   log.info('NanoClaw running');
 }
 
@@ -174,6 +178,7 @@ async function shutdown(signal: string): Promise<void> {
   }
   stopDeliveryPolls();
   stopHostSweep();
+  await stopGitHubAppBroker();
   await teardownChannelAdapters();
   process.exit(0);
 }

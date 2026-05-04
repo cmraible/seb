@@ -22,7 +22,10 @@ export function getAllAgentGroups(): AgentGroup[] {
   return getDb().prepare('SELECT * FROM agent_groups ORDER BY name').all() as AgentGroup[];
 }
 
-export function updateAgentGroup(id: string, updates: Partial<Pick<AgentGroup, 'name' | 'agent_provider'>>): void {
+export function updateAgentGroup(
+  id: string,
+  updates: Partial<Pick<AgentGroup, 'name' | 'agent_provider' | 'github_installation_id'>>,
+): void {
   const fields: string[] = [];
   const values: Record<string, unknown> = { id };
 
